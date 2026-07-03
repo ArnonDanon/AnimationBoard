@@ -4,12 +4,18 @@ import {
   addLayer,
   createDocument,
   createVectorObject,
+  deleteLayer,
+  duplicateLayer,
   frameToData,
   getFramesArray,
   getLayersArray,
   getObjectsArray,
   isLayerEditable,
   layerToData,
+  moveLayer,
+  renameLayer,
+  setLayerLocked,
+  setLayerVisible,
   vectorObjectToData,
 } from './document';
 import { DEFAULT_TRANSFORM } from './types';
@@ -61,6 +67,93 @@ describe('isLayerEditable', () => {
     layer.set('locked', false);
     layer.set('visible', false);
     expect(isLayerEditable(layer)).toBe(false);
+  });
+});
+
+describe('layer management', () => {
+  it('renames, hides, and locks a layer independently of other layers', () => {
+    const doc = createDocument();
+    const frame = getFramesArray(doc).get(0);
+    addLayer(frame, 'Layer 2');
+    const layers = getLayersArray(frame);
+
+    renameLayer(layers.get(1), 'Line Art');
+    setLayerVisible(layers.get(1), false);
+    setLayerLocked(layers.get(1), true);
+
+    expect(layerToData(layers.get(1))).toMatchObject({ name: 'Line Art', visible: false, locked: true });
+    expect(layerToData(layers.get(0))).toMatchObject({ name: 'Layer 1', visible: true, locked: false });
+  });
+
+  it('refuses to delete the last remaining layer in a frame', () => {
+    const doc = createDocument();
+    const frame = getFramesArray(doc).get(0);
+    const deleted = deleteLayer(frame, 0);
+    expect(deleted).toBe(false);
+    expect(getLayersArray(frame).length).toBe(1);
+  });
+
+  it('deletes a layer when another one remains', () => {
+    const doc = createDocument();
+    const frame = getFramesArray(doc).get(0);
+    addLayer(frame, 'Layer 2');
+    const deleted = deleteLayer(frame, 0);
+    expect(deleted).toBe(true);
+    const layers = getLayersArray(frame);
+    expect(layers.length).toBe(1);
+    expect(layerToData(layers.get(0)).name).toBe('Layer 2');
+  });
+
+  it('duplicates a layer with independent copies of its objects, inserted directly above it', () => {
+    const doc = createDocument();
+    const frame = getFramesArray(doc).get(0);
+    const layers = getLayersArray(frame);
+    const original = layers.get(0);
+    getObjectsArray(original).push([
+      createVectorObject({
+        kind: 'stroke',
+        points: [{ x: 0, y: 0, pressure: 1 }],
+        style: { color: '#000', width: 2, opacity: 1 },
+        transform: { ...DEFAULT_TRANSFORM },
+        createdBy: 'a',
+      }),
+    ]);
+
+    duplicateLayer(frame, 0);
+
+    expect(layers.length).toBe(2);
+    expect(layerToData(layers.get(1)).name).toBe('Layer 1 copy');
+    expect(getObjectsArray(layers.get(1)).length).toBe(1);
+
+    // Independent copy: mutating the original's objects doesn't affect the duplicate.
+    getObjectsArray(original).delete(0, 1);
+    expect(getObjectsArray(original).length).toBe(0);
+    expect(getObjectsArray(layers.get(1)).length).toBe(1);
+  });
+
+  it('moves a layer to a new position, preserving its id and content', () => {
+    const doc = createDocument();
+    const frame = getFramesArray(doc).get(0);
+    addLayer(frame, 'Layer 2');
+    addLayer(frame, 'Layer 3');
+    const layers = getLayersArray(frame);
+    const originalBottomId = layerToData(layers.get(0)).id;
+
+    const newIndex = moveLayer(frame, 0, 2);
+
+    expect(newIndex).toBe(2);
+    const moved = layerToData(getLayersArray(frame).get(2));
+    expect(moved.id).toBe(originalBottomId);
+    expect(moved.name).toBe('Layer 1');
+    expect(getLayersArray(frame).length).toBe(3);
+  });
+
+  it('clamps the move target to valid bounds', () => {
+    const doc = createDocument();
+    const frame = getFramesArray(doc).get(0);
+    addLayer(frame, 'Layer 2');
+    const newIndex = moveLayer(frame, 0, 999);
+    expect(newIndex).toBe(1);
   });
 });
 

@@ -1,0 +1,70 @@
+.layer-panel {
+  width: 220px;
+  border: 1px solid #ccc;
+  font-size: 0.85rem;
+  display: flex;
+  flex-direction: column;
+  max-height: 560px;
+}
+
+.layer-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.4rem 0.6rem;
+  border-bottom: 1px solid #ccc;
+  font-weight: bold;
+  background: #f5f5f5;
+}
+
+.layer-panel-header button {
+  font-size: 0.75rem;
+  padding: 0.15rem 0.4rem;
+}
+
+.layer-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+}
+
+.layer-row {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.3rem 0.4rem;
+  border-bottom: 1px solid #eee;
+  cursor: pointer;
+}
+
+.layer-row.active {
+  background: #e6ecff;
+}
+
+.layer-icon-button {
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 0.1rem 0.2rem;
+  font-size: 0.8rem;
+  line-height: 1;
+}
+
+.layer-icon-button:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+
+.layer-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.layer-name-input {
+  flex: 1;
+  font-size: 0.85rem;
+  min-width: 0;
+}

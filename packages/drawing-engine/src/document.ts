@@ -75,15 +75,81 @@ export function isLayerEditable(layer: YLayer): boolean {
   return layer.get('visible') === true && layer.get('locked') !== true;
 }
 
-export function createVectorObject(data: Omit<VectorObjectData, 'id'>): YObject {
+export function createVectorObject(data: Omit<VectorObjectData, 'id'> & { id?: string }): YObject {
   const obj: YObject = new Y.Map();
-  obj.set('id', generateId());
+  obj.set('id', data.id ?? generateId());
   obj.set('kind', data.kind);
   obj.set('points', data.points);
   obj.set('style', data.style);
   obj.set('transform', data.transform);
   obj.set('createdBy', data.createdBy);
   return obj;
+}
+
+function cloneVectorObject(obj: YObject, preserveId: boolean): YObject {
+  const data = vectorObjectToData(obj);
+  return createVectorObject({ ...data, id: preserveId ? data.id : undefined });
+}
+
+function cloneLayer(layer: YLayer, options: { preserveIds: boolean; nameOverride?: string }): YLayer {
+  const data = layerToData(layer);
+  const clone: YLayer = new Y.Map();
+  clone.set('id', options.preserveIds ? data.id : generateId());
+  clone.set('name', options.nameOverride ?? data.name);
+  clone.set('visible', data.visible);
+  clone.set('locked', data.locked);
+  const clonedObjects = getObjectsArray(layer)
+    .toArray()
+    .map((obj) => cloneVectorObject(obj, options.preserveIds));
+  const objects = new Y.Array<YObject>();
+  objects.push(clonedObjects);
+  clone.set('objects', objects);
+  return clone;
+}
+
+/** Refuses to delete the frame's last remaining layer; returns whether it deleted. */
+export function deleteLayer(frame: YFrame, index: number): boolean {
+  const layers = getLayersArray(frame);
+  if (layers.length <= 1) return false;
+  layers.delete(index, 1);
+  return true;
+}
+
+export function duplicateLayer(frame: YFrame, index: number): YLayer {
+  const layers = getLayersArray(frame);
+  const source = layers.get(index);
+  const copy = cloneLayer(source, { preserveIds: false, nameOverride: `${layerToData(source).name} copy` });
+  layers.insert(index + 1, [copy]);
+  return copy;
+}
+
+export function renameLayer(layer: YLayer, name: string): void {
+  layer.set('name', name);
+}
+
+export function setLayerVisible(layer: YLayer, visible: boolean): void {
+  layer.set('visible', visible);
+}
+
+export function setLayerLocked(layer: YLayer, locked: boolean): void {
+  layer.set('locked', locked);
+}
+
+/**
+ * Repositions a layer to `toIndex` (clamped to valid bounds). Yjs shared types can't
+ * be relocated in place once integrated, so this clones-with-preserved-id, deletes the
+ * original, and reinserts the clone — same pattern as the eraser's split/replace.
+ * Returns the layer's actual resulting index.
+ */
+export function moveLayer(frame: YFrame, fromIndex: number, toIndex: number): number {
+  const layers = getLayersArray(frame);
+  const clampedTo = Math.max(0, Math.min(toIndex, layers.length - 1));
+  if (fromIndex < 0 || fromIndex >= layers.length || fromIndex === clampedTo) return fromIndex;
+
+  const clone = cloneLayer(layers.get(fromIndex), { preserveIds: true });
+  layers.delete(fromIndex, 1);
+  layers.insert(clampedTo, [clone]);
+  return clampedTo;
 }
 
 export function vectorObjectToData(obj: YObject): VectorObjectData {

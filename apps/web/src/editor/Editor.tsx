@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { BUILT_IN_BRUSHES, BUILT_IN_PALETTE, createEngine } from '@animationboard/drawing-engine'
 import type { DrawingEngine } from '@animationboard/drawing-engine'
+import { LayerPanel } from './LayerPanel'
 import './Editor.css'
 
 interface EditorProps {
@@ -40,7 +41,6 @@ export function Editor({ animatorId }: EditorProps) {
         </span>
         <button onClick={() => engine?.setActiveFrameIndex((engine.getActiveFrameIndex() ?? 0) + 1)}>▶</button>
         <button onClick={() => engine?.addFrame()}>Add Frame</button>
-        <button onClick={() => engine?.addLayer()}>Add Layer</button>
         <span className="divider" />
         <button disabled={!engine?.hasSelection()} onClick={() => engine?.scaleSelection(1.1)}>Scale +</button>
         <button disabled={!engine?.hasSelection()} onClick={() => engine?.scaleSelection(0.9)}>Scale -</button>
@@ -104,12 +104,15 @@ export function Editor({ animatorId }: EditorProps) {
         ))}
       </div>
 
-      <canvas
-        ref={canvasRef}
-        width={900}
-        height={560}
-        className={activeTool === 'eraser' ? 'editor-canvas erasing' : `editor-canvas ${activeTool}`}
-      />
+      <div className="editor-body">
+        <canvas
+          ref={canvasRef}
+          width={900}
+          height={560}
+          className={activeTool === 'eraser' ? 'editor-canvas erasing' : `editor-canvas ${activeTool}`}
+        />
+        <LayerPanel engine={engine} />
+      </div>
     </div>
   )
 }

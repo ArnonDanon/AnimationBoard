@@ -239,11 +239,32 @@ not part of the POC.
 
 Goal: FR-LAYER-1..5.
 
-- [ ] Default layer per new frame
-- [ ] Add / delete / duplicate / rename layer
-- [ ] Reorder layers (stacking order)
-- [ ] Hide/show, lock/unlock (blocks edits per FR-LAYER-4)
-- [ ] Layer panel UI
+- [x] Default layer per new frame — already in place since Epic 3
+      (`createFrame` always seeds one layer)
+- [x] Add / delete / duplicate / rename layer — `document.ts`
+      (`deleteLayer` refuses to remove a frame's last layer; `duplicateLayer`
+      deep-copies objects with fresh ids so it's a genuinely independent
+      copy). 6 new unit tests
+- [x] Reorder layers (stacking order) — `moveLayer` (clone-with-preserved-id
+      + delete + reinsert, since Yjs shared types can't be relocated in
+      place), exposed as `moveLayerUp`/`moveLayerDown` in the UI. Verified
+      live via actual stacking order: drew overlapping strokes on two
+      layers and confirmed the top color swaps after reordering
+- [x] Hide/show, lock/unlock (blocks edits per FR-LAYER-4) — already
+      enforced by `isLayerEditable` since Epic 3; now toggleable from the UI
+- [x] Layer panel UI — `LayerPanel.tsx`: click a row to make it active
+      (replacing the old hardcoded "always draw on the topmost layer"),
+      inline rename (double-click), visibility/lock icon toggles, move up/
+      down, duplicate, delete
+
+Also replaced the Epic 3-era simplification where the engine always drew on
+whichever layer happened to be topmost — there's now a real
+`activeLayerIndex`, and adding or duplicating a layer makes the new one
+active automatically (matches how most drawing tools behave). Verified the
+full lifecycle live in one pass: add → draw → hide/show → lock (blocks
+drawing) → unlock → rename → reorder → duplicate → delete down to the last
+layer (delete button correctly disables at that point). Zero console errors
+throughout.
 
 ## Epic 7 — Frames & Timeline
 

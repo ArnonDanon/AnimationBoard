@@ -4,10 +4,17 @@ import {
   addLayer as addLayerToDoc,
   createDocument,
   createVectorObject,
+  deleteLayer as deleteLayerFromDoc,
+  duplicateLayer as duplicateLayerInDoc,
   getFramesArray,
   getLayersArray,
   getObjectsArray,
   isLayerEditable,
+  layerToData,
+  moveLayer as moveLayerInDoc,
+  renameLayer as renameLayerInDoc,
+  setLayerLocked as setLayerLockedInDoc,
+  setLayerVisible as setLayerVisibleInDoc,
   vectorObjectToData,
 } from './document';
 import type { YFrame, YObject } from './document';
@@ -21,7 +28,7 @@ import { DEFAULT_BRUSH, resolveStrokeStyle } from './brush';
 import { BUILT_IN_PALETTE } from './palette';
 import { eraseFromLayer } from './eraser';
 import { DEFAULT_TRANSFORM } from './types';
-import type { Brush, Point, Tool } from './types';
+import type { Brush, LayerData, Point, Tool } from './types';
 
 export interface EngineOptions {
   canvas: HTMLCanvasElement;
@@ -41,6 +48,7 @@ export class DrawingEngine {
   private readonly listeners = new Set<() => void>();
 
   private activeFrameIndex = 0;
+  private activeLayerIndex = 0;
   private drawingPoints: Point[] | null = null;
   private selectedObjectId: string | null = null;
   private dragOrigin: Point | null = null;
@@ -77,11 +85,9 @@ export class DrawingEngine {
     return frames.get(Math.min(this.activeFrameIndex, frames.length - 1));
   }
 
-  // Epic 3 scope: no active-layer picker UI yet (that's Epic 6), so new
-  // strokes always land on the topmost layer of the active frame.
   private get activeLayer() {
     const layers = getLayersArray(this.activeFrame);
-    return layers.get(layers.length - 1);
+    return layers.get(Math.min(this.activeLayerIndex, layers.length - 1));
   }
 
   private handlePointerStart(p: Point): void {
@@ -284,8 +290,72 @@ export class DrawingEngine {
     this.setActiveFrameIndex(this.getFrameCount() - 1);
   }
 
+  getLayers(): LayerData[] {
+    const layers = getLayersArray(this.activeFrame);
+    const result: LayerData[] = [];
+    for (let i = 0; i < layers.length; i++) result.push(layerToData(layers.get(i)));
+    return result;
+  }
+
+  getActiveLayerIndex(): number {
+    return Math.min(this.activeLayerIndex, getLayersArray(this.activeFrame).length - 1);
+  }
+
+  setActiveLayerIndex(index: number): void {
+    const count = getLayersArray(this.activeFrame).length;
+    this.activeLayerIndex = Math.max(0, Math.min(index, count - 1));
+    this.notify();
+  }
+
   addLayer(name?: string): void {
     addLayerToDoc(this.activeFrame, name);
+    // A newly added layer becomes active, ready to draw on immediately.
+    this.activeLayerIndex = getLayersArray(this.activeFrame).length - 1;
+    this.notify();
+  }
+
+  deleteLayer(index: number): void {
+    const removed = deleteLayerFromDoc(this.activeFrame, index);
+    if (!removed) return; // refused: it was the frame's last layer
+    this.activeLayerIndex = Math.min(this.activeLayerIndex, getLayersArray(this.activeFrame).length - 1);
+    // The selected object may have lived on the deleted layer.
+    if (this.selectedObjectId && !this.findObjectById(this.selectedObjectId)) {
+      this.selectedObjectId = null;
+    }
+    this.notify();
+  }
+
+  duplicateLayer(index: number): void {
+    duplicateLayerInDoc(this.activeFrame, index);
+    this.activeLayerIndex = index + 1; // the new copy, inserted directly above, becomes active
+    this.notify();
+  }
+
+  renameLayer(index: number, name: string): void {
+    const layers = getLayersArray(this.activeFrame);
+    renameLayerInDoc(layers.get(index), name);
+  }
+
+  setLayerVisible(index: number, visible: boolean): void {
+    const layers = getLayersArray(this.activeFrame);
+    setLayerVisibleInDoc(layers.get(index), visible);
+  }
+
+  setLayerLocked(index: number, locked: boolean): void {
+    const layers = getLayersArray(this.activeFrame);
+    setLayerLockedInDoc(layers.get(index), locked);
+  }
+
+  moveLayerUp(index: number): void {
+    const newIndex = moveLayerInDoc(this.activeFrame, index, index + 1);
+    if (this.activeLayerIndex === index) this.activeLayerIndex = newIndex;
+    this.notify();
+  }
+
+  moveLayerDown(index: number): void {
+    const newIndex = moveLayerInDoc(this.activeFrame, index, index - 1);
+    if (this.activeLayerIndex === index) this.activeLayerIndex = newIndex;
+    this.notify();
   }
 
   undo(): void {
