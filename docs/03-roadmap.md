@@ -42,21 +42,29 @@ multi-user complexity on top of it.
 Goal: an empty app round-trips through the full deploy pipeline before any real
 feature is built, so integration pain is never saved for the end.
 
-- [ ] Repo init, TypeScript project structure (frontend app + drawing-engine package
+- [x] Repo init, TypeScript project structure (frontend app + drawing-engine package
       + CDK infra, per `docs/02-system-architecture.md` §3–4)
-- [ ] CDK stack: Cognito User Pool, empty HTTP API + WebSocket API + Lambda stubs,
-      DynamoDB tables, S3 bucket (see ADR-004, ADR-008)
-- [ ] Amplify Hosting connected to repo, deploys on push
-- [ ] "Hello world" React app deployed and reachable end to end
+- [x] CDK stack: Cognito User Pool, empty HTTP API + WebSocket API + Lambda stubs,
+      DynamoDB tables, S3 bucket (see ADR-004, ADR-008) — deployed to eu-west-1
+- [x] Amplify Hosting connected to repo, deploys on push — app `AnimationBoard`
+      (id `d73qalc1csxug`), branch `main`, build spec in `amplify.yml`
+- [x] "Hello world" React app deployed and reachable end to end — verified live at
+      `main.d73qalc1csxug.amplifyapp.com`
 
 ## Epic 2 — Authentication
 
 Goal: FR-AUTH-1..4.
 
-- [ ] Cognito User Pool configured (email+password, password reset flow)
-- [ ] Register / login / logout screens
-- [ ] Password reset flow
-- [ ] Session persists across reload (Cognito token refresh wired up)
+- [x] Cognito User Pool configured (email+password, password reset flow) —
+      `accountRecovery: EMAIL_ONLY` added to AuthStack
+- [x] Register / login / logout screens — `apps/web/src/auth/AuthScreen.tsx`,
+      wired via `aws-amplify/auth`
+- [x] Password reset flow — request-code step verified end-to-end; the
+      confirm-code step uses the same `confirmResetPassword` API verified via
+      the symmetric `confirmSignUp` path (untestable further without real
+      email inbox access)
+- [x] Session persists across reload (Cognito token refresh wired up) —
+      verified via headless browser: reload keeps the signed-in state
 
 ## Epic 3 — Drawing Engine Core
 

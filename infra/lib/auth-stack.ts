@@ -14,6 +14,7 @@ export class AuthStack extends cdk.Stack {
       signInAliases: { email: true },
       autoVerify: { email: true },
       passwordPolicy: { minLength: 8 },
+      accountRecovery: cognito.AccountRecovery.EMAIL_ONLY,
       removalPolicy: cdk.RemovalPolicy.DESTROY, // POC: clean teardown over retention
     });
 
