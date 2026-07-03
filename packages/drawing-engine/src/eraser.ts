@@ -125,7 +125,7 @@ function buildWorkingGeometry(
     const wa = widths[i - 1];
     const wb = widths[i];
     const segLength = Math.hypot(b.x - a.x, b.y - a.y);
-    const mightMatter = minDistanceSegmentToPath(a, b, erasePath) <= eraseRadius + segLength;
+    const mightMatter = minDistanceSegmentToPath(a, b, erasePath) <= eraseRadius + segLength + Math.max(wa, wb) / 2;
 
     if (mightMatter && segLength > maxSpacing) {
       const steps = Math.ceil(segLength / maxSpacing);
@@ -159,16 +159,24 @@ export function eraseFromObjectData(
   // Test the stroke's own rendered *segments* against the eraser path, not just its
   // sample points — otherwise a fast/coarse stroke with widely-spaced points can be
   // visually crossed by the eraser without either endpoint being close enough to
-  // register. The radius here is exact (matches the on-screen eraser circle exactly,
-  // no padding) so erasing stays predictable regardless of how thick the stroke is.
+  // register.
   const { points: worldPoints, widths } = buildWorkingGeometry(rawWorldPoints, rawWidths, erasePath, eraseRadius);
 
+  // The test is widened by the stroke's own half-width, because the eraser should
+  // remove ink wherever it visually touches it — a thick stroke's rendered edge
+  // extends past its centerline, same as a real eraser doesn't care about a pen's
+  // "center", only where its tip actually contacts the page. Precision doesn't
+  // suffer from this the way it used to: erase granularity is now bounded by
+  // buildWorkingGeometry's fixed subdivision, not by the stroke's original point
+  // spacing, so this stays predictable instead of ballooning unpredictably.
   const erased = new Array<boolean>(worldPoints.length).fill(false);
   if (worldPoints.length === 1) {
-    if (distanceToPath(worldPoints[0], erasePath) <= eraseRadius) erased[0] = true;
+    const effectiveRadius = eraseRadius + widths[0] / 2;
+    if (distanceToPath(worldPoints[0], erasePath) <= effectiveRadius) erased[0] = true;
   } else {
     for (let i = 1; i < worldPoints.length; i++) {
-      if (minDistanceSegmentToPath(worldPoints[i - 1], worldPoints[i], erasePath) <= eraseRadius) {
+      const effectiveRadius = eraseRadius + (widths[i - 1] + widths[i]) / 4;
+      if (minDistanceSegmentToPath(worldPoints[i - 1], worldPoints[i], erasePath) <= effectiveRadius) {
         erased[i - 1] = true;
         erased[i] = true;
       }

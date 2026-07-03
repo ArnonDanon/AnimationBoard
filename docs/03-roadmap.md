@@ -192,8 +192,8 @@ compounding precision problems, both now fixed in `eraser.ts`.
   (width 10, half-width 5), the padding alone more than doubled the actual
   erase reach beyond the visible circle — worse for smaller radii and
   thicker brushes, exactly matching "smallest size is where it's easiest to
-  see." Removed entirely: the erase radius is now exact, matching the
-  on-screen heat-zone circle with no hidden bonus reach.
+  see." Removed entirely in this pass: the erase radius became exact,
+  matching the on-screen heat-zone circle with no bonus reach.
 - **Erase granularity was bound to the target stroke's original sample
   spacing**, not to anything the user could see: touching any part of a
   segment erased both of its full endpoints, so a quickly-drawn stroke
@@ -204,10 +204,19 @@ compounding precision problems, both now fixed in `eraser.ts`.
   `radius / 3`) before testing, so precision no longer depends on how fast
   the original stroke happened to be drawn. Segments far from the eraser are
   left untouched at their original point count.
-- Added a dedicated precision regression test plus a real-browser check on
-  an actual thick Marker stroke: erasing at minimum size now clears a small,
-  precise circular footprint — full erasure dead-center, fully intact just
-  outside the radius, no blurry over-reach in between.
+
+**Third follow-up**: removing the half-width padding above overcorrected —
+reported as the eraser not clearing the full visible hot-zone on Marker/Ink
+Brush, leaving a stubby rounded "sausage" of surviving ink inside the
+circle. The padding wasn't wrong in principle (a real eraser removes ink
+wherever it visually touches, not just at a stroke's mathematical
+centerline) — it was only ever a problem *combined with* the unbounded
+granularity bug above, which is now fixed. Reinstated the half-width
+widening on top of the now-precise, bounded granularity: erasing a thick
+stroke now clears its full rendered ink extent within the circle, while
+still leaving everything well outside `radius + half-width` untouched.
+Verified live on both Marker and Ink Brush, including at minimum eraser
+size (the case that first exposed all three of these bugs).
 
 ## Epic 6 — Layers
 

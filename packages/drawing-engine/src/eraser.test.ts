@@ -52,13 +52,20 @@ describe('eraseFromObjectData', () => {
     expect(rightMin - leftMax).toBeLessThan(radius * 4);
   });
 
-  it('does not widen the erase radius by the stroke width — the eraser is exact, matching what the on-screen circle shows', () => {
-    // A thick stroke (width 20, half-width 10) with the eraser sitting 8px off its
-    // centerline, radius only 2. Previously this hit due to hidden half-width padding
-    // (radius effectively became 2+10=12) — now it must miss, since 8 > 2.
+  it('widens the hit test by the stroke half-width, so erasing removes ink wherever it visually touches, not just at the centerline', () => {
+    // A thick stroke (width 20, half-width 10): its rendered ink extends 10px past
+    // its centerline, so an eraser whose circle visually overlaps that ink should
+    // remove it even though the eraser's *center* is farther than its radius from
+    // the centerline. 8px off centerline, radius 2 -> effective reach 2+10=12, hits.
     const stroke = makeStroke([{ x: 0, y: 0 }, { x: 100, y: 0 }, { x: 1000, y: 0 }], 20);
-    const result = eraseFromObjectData(stroke, [{ x: 50, y: 8 }], 2);
-    expect(result).toBeNull();
+    const hit = eraseFromObjectData(stroke, [{ x: 50, y: 8 }], 2);
+    expect(hit).toHaveLength(2); // splits around x=50; the far point at x=1000 survives in the second fragment
+    const [, max] = xRange(hit![1].points);
+    expect(max).toBeCloseTo(1000, 0);
+
+    // But it's still bounded, not unlimited: well beyond radius + half-width, it misses.
+    const miss = eraseFromObjectData(stroke, [{ x: 50, y: 50 }], 2);
+    expect(miss).toBeNull();
   });
 
   it('erases a stroke even when the eraser passes through the middle of a segment, nowhere near any sample point', () => {
