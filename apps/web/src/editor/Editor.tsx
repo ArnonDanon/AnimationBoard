@@ -26,6 +26,7 @@ export function Editor({ animatorId }: EditorProps) {
   }, [animatorId])
 
   const engine = engineRef.current
+  const activeTool = engine?.getActiveTool() ?? 'brush'
 
   return (
     <div className="editor">
@@ -48,10 +49,36 @@ export function Editor({ animatorId }: EditorProps) {
       </div>
 
       <div className="editor-toolbar">
+        <button
+          className={activeTool === 'brush' ? 'brush-button active' : 'brush-button'}
+          onClick={() => engine?.setActiveTool('brush')}
+        >
+          Brush
+        </button>
+        <button
+          className={activeTool === 'eraser' ? 'brush-button active' : 'brush-button'}
+          onClick={() => engine?.setActiveTool('eraser')}
+        >
+          Eraser
+        </button>
+        {activeTool === 'eraser' && (
+          <label className="eraser-size">
+            Size
+            <input
+              type="range"
+              min={4}
+              max={40}
+              value={engine?.getEraserRadius() ?? 12}
+              onChange={(e) => engine?.setEraserRadius(Number(e.target.value))}
+            />
+          </label>
+        )}
+        <span className="divider" />
         {BUILT_IN_BRUSHES.map((brush) => (
           <button
             key={brush.id}
-            className={engine?.getActiveBrush().id === brush.id ? 'brush-button active' : 'brush-button'}
+            disabled={activeTool !== 'brush'}
+            className={activeTool === 'brush' && engine?.getActiveBrush().id === brush.id ? 'brush-button active' : 'brush-button'}
             title={brush.pressureSensitive ? `${brush.name} (pressure: ${brush.pressureAffects})` : brush.name}
             onClick={() => engine?.setActiveBrush(brush)}
           >
@@ -62,7 +89,8 @@ export function Editor({ animatorId }: EditorProps) {
         {BUILT_IN_PALETTE.map((color) => (
           <button
             key={color}
-            className={engine?.getActiveColor() === color ? 'swatch active' : 'swatch'}
+            disabled={activeTool !== 'brush'}
+            className={activeTool === 'brush' && engine?.getActiveColor() === color ? 'swatch active' : 'swatch'}
             style={{ backgroundColor: color }}
             aria-label={color}
             onClick={() => engine?.setActiveColor(color)}
@@ -70,7 +98,7 @@ export function Editor({ animatorId }: EditorProps) {
         ))}
       </div>
 
-      <canvas ref={canvasRef} width={900} height={560} className="editor-canvas" />
+      <canvas ref={canvasRef} width={900} height={560} className={activeTool === 'eraser' ? 'editor-canvas erasing' : 'editor-canvas'} />
     </div>
   )
 }

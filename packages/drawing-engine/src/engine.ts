@@ -19,14 +19,17 @@ import { exportSnapshot as encodeSnapshot } from './serialize';
 import { rotateObject, scaleObject, translateObject } from './transform';
 import { DEFAULT_BRUSH, resolveStrokeStyle } from './brush';
 import { BUILT_IN_PALETTE } from './palette';
+import { eraseFromLayer } from './eraser';
 import { DEFAULT_TRANSFORM } from './types';
-import type { Brush, Point } from './types';
+import type { Brush, Point, Tool } from './types';
 
 export interface EngineOptions {
   canvas: HTMLCanvasElement;
   animatorId?: string;
   doc?: Y.Doc;
 }
+
+const DEFAULT_ERASER_RADIUS = 12;
 
 export class DrawingEngine {
   readonly doc: Y.Doc;
@@ -43,6 +46,9 @@ export class DrawingEngine {
   private dragOrigin: Point | null = null;
   private activeBrush: Brush = DEFAULT_BRUSH;
   private activeColor: string = BUILT_IN_PALETTE[0];
+  private activeTool: Tool = 'brush';
+  private eraserRadius = DEFAULT_ERASER_RADIUS;
+  private lastErasePoint: Point | null = null;
 
   constructor(options: EngineOptions) {
     this.doc = options.doc ?? createDocument();
@@ -76,6 +82,12 @@ export class DrawingEngine {
   }
 
   private handlePointerStart(p: Point): void {
+    if (this.activeTool === 'eraser') {
+      this.lastErasePoint = p;
+      this.eraseAt([p]);
+      return;
+    }
+
     const hit = hitTestFrame(this.ctx, this.activeFrame, p.x, p.y);
     if (hit) {
       this.selectedObjectId = vectorObjectToData(hit).id;
@@ -94,6 +106,14 @@ export class DrawingEngine {
   }
 
   private handlePointerMove(p: Point): void {
+    if (this.activeTool === 'eraser') {
+      if (this.lastErasePoint) {
+        this.eraseAt([this.lastErasePoint, p]);
+        this.lastErasePoint = p;
+      }
+      return;
+    }
+
     if (this.drawingPoints) {
       this.drawingPoints.push(p);
       this.renderWithLiveStroke();
@@ -109,12 +129,23 @@ export class DrawingEngine {
   }
 
   private handlePointerEnd(p: Point): void {
+    if (this.activeTool === 'eraser') {
+      this.lastErasePoint = null;
+      return;
+    }
+
     if (this.drawingPoints) {
       this.drawingPoints.push(p);
       this.commitStroke(this.drawingPoints);
       this.drawingPoints = null;
     }
     this.dragOrigin = null;
+  }
+
+  private eraseAt(path: Point[]): void {
+    const layer = this.activeLayer;
+    if (!layer || !isLayerEditable(layer)) return;
+    eraseFromLayer(layer, path, this.eraserRadius);
   }
 
   private commitStroke(points: Point[]): void {
@@ -204,6 +235,25 @@ export class DrawingEngine {
 
   setActiveColor(color: string): void {
     this.activeColor = color;
+    this.notify();
+  }
+
+  getActiveTool(): Tool {
+    return this.activeTool;
+  }
+
+  setActiveTool(tool: Tool): void {
+    this.activeTool = tool;
+    this.selectedObjectId = null;
+    this.notify();
+  }
+
+  getEraserRadius(): number {
+    return this.eraserRadius;
+  }
+
+  setEraserRadius(radius: number): void {
+    this.eraserRadius = radius;
     this.notify();
   }
 

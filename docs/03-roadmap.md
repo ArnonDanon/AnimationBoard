@@ -127,10 +127,36 @@ layer once with the real opacity — reverified pixel-exact after the fix.
 
 Goal: FR-ERASE-1..3.
 
-- [ ] `EraserService`: geometry subtraction against overlapping VectorObjects
-      (splits/trims paths rather than deleting whole objects)
-- [ ] At least one adjustable eraser size
-- [ ] Smoke-test responsiveness at normal drawing speed
+- [x] `EraserService`: geometry subtraction against overlapping VectorObjects
+      (splits/trims paths rather than deleting whole objects) — `eraser.ts`,
+      9 unit tests (miss/full-cover/middle-split/end-trim/transform-baking/
+      width-slicing, plus layer-scoped integration tests). Verified live: a
+      stroke split down the middle leaves ink on both sides of the gap, not
+      just a trimmed end — confirming actual splitting, not just deletion
+- [x] At least one adjustable eraser size — range slider in the toolbar,
+      `setEraserRadius`/`getEraserRadius`
+- [x] Smoke-test responsiveness at normal drawing speed — ~1.8ms per erase
+      event across 5 strokes (60fps budget is ~16ms/event), confirmed live
+
+**Two things found and fixed during verification, neither in the erase logic
+itself:**
+- A stress test (25 overlapping translucent strokes, rapid scrub-erase) took
+  ~1.7s — traced to full-canvas offscreen-layer allocation per translucent
+  object per render. Fixed by reusing a single scratch canvas instead of
+  allocating one per object per frame, and by giving uniform-width strokes
+  (e.g. Marker) a fast single-stroke path that was never actually necessary
+  to route through the offscreen-compositing logic at all. At realistic POC
+  scale this is back to ~1.8ms/event; erasing across many dozens of
+  overlapping translucent objects at once remains a known scaling limit, not
+  worth solving now (dirty-rectangle/incremental rendering would fix it, but
+  is real engineering effort disproportionate to POC scope).
+- Confirmed Chromium's pointer input isn't perfectly uniform even for a
+  "constant-pressure" mouse drag: the very first `pointermove` after
+  `pointerdown` reports `pressure: 0`, then jumps to `0.5` for the rest of
+  the gesture. Harmless (it's genuinely a slightly different sample, and the
+  engine already handles pressure per point correctly) but worth knowing if
+  a future bug report says "the very start of every mouse stroke looks a bit
+  thin."
 
 ## Epic 6 — Layers
 

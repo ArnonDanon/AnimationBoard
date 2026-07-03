@@ -21,25 +21,41 @@ export function withObjectTransform(ctx: CanvasRenderingContext2D, transform: Tr
   ctx.restore();
 }
 
-function paintStrokeSegments(ctx: CanvasRenderingContext2D, points: Point[], style: Style, transform: Transform): void {
+function isUniformWidth(style: Style, pointCount: number): boolean {
+  if (!style.widths || style.widths.length !== pointCount || pointCount === 0) return true;
+  return style.widths.every((w) => w === style.widths![0]);
+}
+
+function paintDot(ctx: CanvasRenderingContext2D, point: Point, radius: number, style: Style, transform: Transform): void {
+  withObjectTransform(ctx, transform, () => {
+    ctx.fillStyle = style.color;
+    ctx.globalAlpha = style.opacity;
+    ctx.beginPath();
+    ctx.arc(point.x, point.y, radius, 0, Math.PI * 2);
+    ctx.fill();
+  });
+}
+
+// A single Path2D stroked once composites as one shape, so uniform-width strokes
+// (the common case) never need the overlap-alpha workaround below — this is also
+// far cheaper than segment-by-segment stroking for anything beyond a handful of points.
+function paintUniformStroke(ctx: CanvasRenderingContext2D, points: Point[], width: number, style: Style, transform: Transform): void {
+  const path = buildStrokePath(points);
   withObjectTransform(ctx, transform, () => {
     ctx.strokeStyle = style.color;
-    ctx.fillStyle = style.color;
+    ctx.lineWidth = width;
+    ctx.globalAlpha = style.opacity;
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
+    ctx.stroke(path);
+  });
+}
 
-    if (points.length === 1) {
-      const radius = (style.widths?.[0] ?? style.width) / 2;
-      ctx.beginPath();
-      ctx.arc(points[0].x, points[0].y, radius, 0, Math.PI * 2);
-      ctx.fill();
-      return;
-    }
-
-    // Pressure-sensitive width varies per point, so each segment is stroked with its
-    // own interpolated width and round caps — much simpler than building a mitered
-    // variable-width outline polygon, and visually equivalent for a POC brush.
-    const widths = style.widths && style.widths.length === points.length ? style.widths : points.map(() => style.width);
+function paintVariableWidthSegments(ctx: CanvasRenderingContext2D, points: Point[], widths: number[], style: Style, transform: Transform): void {
+  withObjectTransform(ctx, transform, () => {
+    ctx.strokeStyle = style.color;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
     for (let i = 1; i < points.length; i++) {
       ctx.lineWidth = (widths[i - 1] + widths[i]) / 2;
       ctx.beginPath();
@@ -50,25 +66,49 @@ function paintStrokeSegments(ctx: CanvasRenderingContext2D, points: Point[], sty
   });
 }
 
+// Reused across calls instead of allocating a full-size canvas per translucent
+// object per render — that allocation was the dominant cost under any real load
+// (measured ~150x slower for a stress test of overlapping translucent strokes).
+let scratchLayer: HTMLCanvasElement | null = null;
+function getScratchLayer(width: number, height: number): HTMLCanvasElement {
+  if (!scratchLayer) scratchLayer = document.createElement('canvas');
+  if (scratchLayer.width !== width || scratchLayer.height !== height) {
+    scratchLayer.width = width;
+    scratchLayer.height = height;
+  }
+  return scratchLayer;
+}
+
 export function paintStroke(ctx: CanvasRenderingContext2D, points: Point[], style: Style, transform: Transform): void {
   if (points.length === 0) return;
 
-  // Adjacent round-capped segments overlap where they join, so stroking them
-  // directly with globalAlpha < 1 double-composites alpha at every overlap,
-  // making a translucent stroke look blotchy instead of uniformly translucent.
-  // Painting the whole stroke opaque on an offscreen layer first, then
-  // compositing that layer once with the style's opacity, avoids it.
-  if (style.opacity >= 1) {
-    paintStrokeSegments(ctx, points, style, transform);
+  if (points.length === 1) {
+    paintDot(ctx, points[0], (style.widths?.[0] ?? style.width) / 2, style, transform);
     return;
   }
 
-  const layer = document.createElement('canvas');
-  layer.width = ctx.canvas.width;
-  layer.height = ctx.canvas.height;
+  if (isUniformWidth(style, points.length)) {
+    paintUniformStroke(ctx, points, style.widths?.[0] ?? style.width, style, transform);
+    return;
+  }
+
+  // Width varies per point, so it's stroked segment-by-segment (see
+  // paintVariableWidthSegments) — but adjacent round-capped segments overlap where
+  // they join, so stroking them directly under globalAlpha < 1 double-composites
+  // alpha at every overlap. Painting opaque to a scratch layer first, then
+  // compositing once at the real opacity, avoids that. Skipped when fully opaque,
+  // since compositing opaque fills twice is a no-op.
+  const widths = style.widths!;
+  if (style.opacity >= 1) {
+    paintVariableWidthSegments(ctx, points, widths, style, transform);
+    return;
+  }
+
+  const layer = getScratchLayer(ctx.canvas.width, ctx.canvas.height);
   const layerCtx = layer.getContext('2d');
   if (!layerCtx) return;
-  paintStrokeSegments(layerCtx, points, style, transform);
+  layerCtx.clearRect(0, 0, layer.width, layer.height);
+  paintVariableWidthSegments(layerCtx, points, widths, style, transform);
 
   ctx.save();
   ctx.globalAlpha = style.opacity;

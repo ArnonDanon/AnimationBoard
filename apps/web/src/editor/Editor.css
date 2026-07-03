@@ -46,9 +46,21 @@
   outline-offset: 2px;
 }
 
+.eraser-size {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.85rem;
+  color: #555;
+}
+
 .editor-canvas {
   border: 1px solid #ccc;
   touch-action: none;
   cursor: crosshair;
   background: #ffffff;
+}
+
+.editor-canvas.erasing {
+  cursor: cell;
 }
