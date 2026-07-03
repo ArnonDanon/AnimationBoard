@@ -100,6 +100,48 @@ export function splitSurvivingRuns(count: number, isErased: (index: number) => b
   return runs;
 }
 
+// Only subdivides where it might matter — segments nowhere near the eraser stay at
+// their original point count, so this doesn't bloat far-away, untouched geometry.
+function buildWorkingGeometry(
+  points: Point[],
+  widths: number[],
+  erasePath: { x: number; y: number }[],
+  eraseRadius: number,
+): { points: Point[]; widths: number[] } {
+  if (points.length < 2) return { points, widths };
+
+  // Precision is bounded by this fixed spacing instead of by whatever the original
+  // stroke's point spacing happened to be (which depends on how fast it was drawn —
+  // an invisible factor with no relationship to what the eraser circle shows on
+  // screen). Scales with the eraser radius so a bigger eraser doesn't pay for
+  // needless precision.
+  const maxSpacing = Math.max(1, eraseRadius / 3);
+
+  const outPoints: Point[] = [points[0]];
+  const outWidths: number[] = [widths[0]];
+  for (let i = 1; i < points.length; i++) {
+    const a = points[i - 1];
+    const b = points[i];
+    const wa = widths[i - 1];
+    const wb = widths[i];
+    const segLength = Math.hypot(b.x - a.x, b.y - a.y);
+    const mightMatter = minDistanceSegmentToPath(a, b, erasePath) <= eraseRadius + segLength;
+
+    if (mightMatter && segLength > maxSpacing) {
+      const steps = Math.ceil(segLength / maxSpacing);
+      for (let s = 1; s <= steps; s++) {
+        const t = s / steps;
+        outPoints.push({ x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t, pressure: a.pressure + (b.pressure - a.pressure) * t });
+        outWidths.push(wa + (wb - wa) * t);
+      }
+    } else {
+      outPoints.push(b);
+      outWidths.push(wb);
+    }
+  }
+  return { points: outPoints, widths: outWidths };
+}
+
 /**
  * Returns the stroke fragments that survive erasing, with the object's transform
  * baked into their point coordinates (fragments always use an identity transform).
@@ -111,22 +153,22 @@ export function eraseFromObjectData(
   erasePath: { x: number; y: number }[],
   eraseRadius: number,
 ): Omit<VectorObjectData, 'id'>[] | null {
-  const worldPoints = data.points.map((p) => applyTransform(p, data.transform));
-  const widthAt = (i: number) => data.style.widths?.[i] ?? data.style.width;
+  const rawWorldPoints = data.points.map((p) => applyTransform(p, data.transform));
+  const rawWidths = data.points.map((_, i) => data.style.widths?.[i] ?? data.style.width);
 
   // Test the stroke's own rendered *segments* against the eraser path, not just its
   // sample points — otherwise a fast/coarse stroke with widely-spaced points can be
   // visually crossed by the eraser without either endpoint being close enough to
-  // register. Also widen the test by the segment's own half-width, since a thick
-  // stroke's visible ink extends past its centerline.
+  // register. The radius here is exact (matches the on-screen eraser circle exactly,
+  // no padding) so erasing stays predictable regardless of how thick the stroke is.
+  const { points: worldPoints, widths } = buildWorkingGeometry(rawWorldPoints, rawWidths, erasePath, eraseRadius);
+
   const erased = new Array<boolean>(worldPoints.length).fill(false);
   if (worldPoints.length === 1) {
-    const effectiveRadius = eraseRadius + widthAt(0) / 2;
-    if (distanceToPath(worldPoints[0], erasePath) <= effectiveRadius) erased[0] = true;
+    if (distanceToPath(worldPoints[0], erasePath) <= eraseRadius) erased[0] = true;
   } else {
     for (let i = 1; i < worldPoints.length; i++) {
-      const effectiveRadius = eraseRadius + (widthAt(i - 1) + widthAt(i)) / 4;
-      if (minDistanceSegmentToPath(worldPoints[i - 1], worldPoints[i], erasePath) <= effectiveRadius) {
+      if (minDistanceSegmentToPath(worldPoints[i - 1], worldPoints[i], erasePath) <= eraseRadius) {
         erased[i - 1] = true;
         erased[i] = true;
       }
@@ -134,9 +176,9 @@ export function eraseFromObjectData(
   }
 
   const isErased = (i: number) => erased[i];
-  const runs = splitSurvivingRuns(data.points.length, isErased);
+  const runs = splitSurvivingRuns(worldPoints.length, isErased);
   const survivingCount = runs.reduce((sum, r) => sum + r.length, 0);
-  if (survivingCount === data.points.length) return null;
+  if (survivingCount === worldPoints.length) return null;
 
   return runs.map((run) => ({
     kind: 'stroke' as const,
@@ -144,7 +186,7 @@ export function eraseFromObjectData(
     style: {
       color: data.style.color,
       width: data.style.width,
-      widths: data.style.widths ? run.map((i) => data.style.widths![i]) : undefined,
+      widths: run.map((i) => widths[i]),
       opacity: data.style.opacity,
     },
     transform: { ...DEFAULT_TRANSFORM },

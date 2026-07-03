@@ -15,6 +15,11 @@ function makeStroke(points: { x: number; y: number }[], width = 0): VectorObject
   };
 }
 
+function xRange(points: { x: number }[]): [number, number] {
+  const xs = points.map((p) => p.x);
+  return [Math.min(...xs), Math.max(...xs)];
+}
+
 describe('eraseFromObjectData', () => {
   it('returns null when the eraser path misses the stroke entirely', () => {
     const stroke = makeStroke([{ x: 0, y: 0 }, { x: 10, y: 0 }]);
@@ -28,43 +33,76 @@ describe('eraseFromObjectData', () => {
     expect(result).toEqual([]);
   });
 
-  it('erases a stroke even when the eraser passes through the middle of a segment, nowhere near any sample point', () => {
-    // This is the bug: two points far apart (as a fast/coarse pointer drag produces),
-    // with the eraser sitting right on top of the rendered line between them. A
-    // point-only distance check would miss this (both points are 50px away); the
-    // fix tests the segment itself.
-    const stroke = makeStroke([{ x: 0, y: 0 }, { x: 100, y: 0 }]);
-    const result = eraseFromObjectData(stroke, [{ x: 50, y: 0 }], 5);
-    expect(result).toEqual([]);
+  it('does not erase beyond the eraser radius, even for a stroke with widely-spaced points', () => {
+    // Regression test: erasing used to mark a whole segment's endpoints erased if any
+    // part of it was touched, so a long segment (as a fast/coarse stroke produces)
+    // could lose far more than the visible eraser circle — e.g. minimum-size erasing
+    // sometimes deleted almost everything nearby. Precision must now be bounded by a
+    // small fixed amount, not by how sparse the original stroke happened to be.
+    const stroke = makeStroke([{ x: 0, y: 0 }, { x: 200, y: 0 }]);
+    const radius = 4;
+    const eraseCenter = 100;
+    const result = eraseFromObjectData(stroke, [{ x: eraseCenter, y: 0 }], radius);
+    expect(result).toHaveLength(2);
+    const [, leftMax] = xRange(result![0].points);
+    const [rightMin] = xRange(result![1].points);
+    expect(leftMax).toBeLessThan(eraseCenter);
+    expect(rightMin).toBeGreaterThan(eraseCenter);
+    // The gap should be roughly 2x the radius, not "most of the 200px stroke".
+    expect(rightMin - leftMax).toBeLessThan(radius * 4);
   });
 
-  it('widens the hit test by the stroke half-width, so a thick stroke erases even when the eraser center is off its centerline', () => {
-    const stroke = makeStroke([{ x: 0, y: 0 }, { x: 100, y: 0 }, { x: 1000, y: 0 }], 20); // half-width 10
-    const missesWithoutPadding = eraseFromObjectData(
-      makeStroke([{ x: 0, y: 0 }, { x: 100, y: 0 }, { x: 1000, y: 0 }], 0),
-      [{ x: 50, y: 8 }],
-      2,
-    );
-    expect(missesWithoutPadding).toBeNull(); // 8px off centerline, radius 2, hairline stroke: genuinely misses
+  it('does not widen the erase radius by the stroke width — the eraser is exact, matching what the on-screen circle shows', () => {
+    // A thick stroke (width 20, half-width 10) with the eraser sitting 8px off its
+    // centerline, radius only 2. Previously this hit due to hidden half-width padding
+    // (radius effectively became 2+10=12) — now it must miss, since 8 > 2.
+    const stroke = makeStroke([{ x: 0, y: 0 }, { x: 100, y: 0 }, { x: 1000, y: 0 }], 20);
+    const result = eraseFromObjectData(stroke, [{ x: 50, y: 8 }], 2);
+    expect(result).toBeNull();
+  });
 
-    const hitsWithPadding = eraseFromObjectData(stroke, [{ x: 50, y: 8 }], 2);
-    expect(hitsWithPadding).toHaveLength(1);
-    expect(hitsWithPadding![0].points[0].x).toBe(1000); // the untouched far point survives
+  it('erases a stroke even when the eraser passes through the middle of a segment, nowhere near any sample point', () => {
+    const stroke = makeStroke([{ x: 0, y: 0 }, { x: 100, y: 0 }]);
+    const result = eraseFromObjectData(stroke, [{ x: 50, y: 0 }], 5);
+    expect(result).toHaveLength(2); // splits, rather than being missed entirely (the original bug)
+    const [, leftMax] = xRange(result![0].points);
+    const [rightMin] = xRange(result![1].points);
+    expect(leftMax).toBeLessThan(50);
+    expect(rightMin).toBeGreaterThan(50);
   });
 
   it('splits a stroke into two fragments when the eraser cuts through one segment in the middle', () => {
     const stroke = makeStroke([{ x: 0, y: 0 }, { x: 50, y: 0 }, { x: 100, y: 0 }, { x: 150, y: 0 }, { x: 200, y: 0 }]);
     const result = eraseFromObjectData(stroke, [{ x: 125, y: 0 }], 4);
     expect(result).toHaveLength(2);
-    expect(result![0].points.map((p) => p.x)).toEqual([0, 50]);
-    expect(result![1].points.map((p) => p.x)).toEqual([200]);
+    const [leftMin, leftMax] = xRange(result![0].points);
+    const [rightMin, rightMax] = xRange(result![1].points);
+    expect(leftMin).toBeCloseTo(0, 0);
+    expect(leftMax).toBeLessThan(125);
+    expect(rightMin).toBeGreaterThan(125);
+    expect(rightMax).toBeCloseTo(200, 0);
   });
 
-  it('trims the tail when the eraser only touches the last segment', () => {
+  it('trims the tail when the eraser touches right at the stroke\'s endpoint', () => {
+    const stroke = makeStroke([{ x: 0, y: 0 }, { x: 50, y: 0 }, { x: 100, y: 0 }, { x: 150, y: 0 }]);
+    const result = eraseFromObjectData(stroke, [{ x: 150, y: 0 }], 4);
+    expect(result).toHaveLength(1);
+    const [min, max] = xRange(result![0].points);
+    expect(min).toBeCloseTo(0, 0);
+    expect(max).toBeLessThan(150);
+  });
+
+  it('leaves a small untouched tip as its own fragment instead of deleting the whole rest of a long segment', () => {
+    // The regression this guards against: erasing at x=140 with radius 4 must not
+    // also remove the tip at x=150 (10px away, outside the radius).
     const stroke = makeStroke([{ x: 0, y: 0 }, { x: 50, y: 0 }, { x: 100, y: 0 }, { x: 150, y: 0 }]);
     const result = eraseFromObjectData(stroke, [{ x: 140, y: 0 }], 4);
-    expect(result).toHaveLength(1);
-    expect(result![0].points.map((p) => p.x)).toEqual([0, 50]);
+    expect(result).toHaveLength(2);
+    const [, bodyMax] = xRange(result![0].points);
+    const [tipMin, tipMax] = xRange(result![1].points);
+    expect(bodyMax).toBeLessThan(136);
+    expect(tipMin).toBeGreaterThan(144);
+    expect(tipMax).toBeCloseTo(150, 0);
   });
 
   it('bakes the object transform into surviving fragment points and resets to identity', () => {
@@ -77,16 +115,18 @@ describe('eraseFromObjectData', () => {
     const hit = eraseFromObjectData(stroke, [{ x: 100, y: 50 }], 3);
     expect(hit).toHaveLength(1);
     expect(hit![0].transform).toEqual(DEFAULT_TRANSFORM);
-    expect(hit![0].points[0].x).toBe(1100); // 1000 (local) + 100 (translate) — the surviving far point
+    const [, max] = xRange(hit![0].points);
+    expect(max).toBeCloseTo(1100, 0); // 1000 (local) + 100 (translate) — the surviving far point
   });
 
-  it('slices per-point widths so a pressure-sensitive stroke keeps its correct widths after a split', () => {
+  it('carries per-point widths into the split fragments with matching lengths', () => {
     const stroke = makeStroke([{ x: 0, y: 0 }, { x: 50, y: 0 }, { x: 100, y: 0 }, { x: 150, y: 0 }, { x: 200, y: 0 }]);
     stroke.style.widths = [2, 4, 6, 8, 10];
     const result = eraseFromObjectData(stroke, [{ x: 125, y: 0 }], 2);
     expect(result).toHaveLength(2);
-    expect(result![0].style.widths).toEqual([2, 4]);
-    expect(result![1].style.widths).toEqual([10]);
+    for (const fragment of result!) {
+      expect(fragment.style.widths).toHaveLength(fragment.points.length);
+    }
   });
 });
 

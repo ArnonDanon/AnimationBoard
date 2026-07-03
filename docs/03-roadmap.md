@@ -165,10 +165,8 @@ erasing at minimum size):
   between them. A fast/coarse stroke has widely-spaced points, so the eraser
   could visually cross the rendered line between two points without being
   close enough to either point to register. Fixed with proper segment-to-path
-  distance testing (including a real segment-intersection check), plus
-  widening the effective radius by the stroke's own half-width so thick
-  strokes erase even when the eraser center is slightly off their centerline.
-  9 new/updated unit tests, including one that reproduces the exact gap-cross
+  distance testing (including a real segment-intersection check). 9 new/
+  updated unit tests, including one that reproduces the exact gap-cross
   scenario.
 - **Deeper root cause of the reported symptom, unrelated to erasing at all**:
   the Brush tool's `pointerdown` hit-tested existing objects before deciding
@@ -185,6 +183,31 @@ erasing at minimum size):
   radius, scaling live with the size slider — shown on hover, not just while
   actively erasing (required extending pointer capture to track hover moves,
   separate from the drag-only moves used for drawing/erasing/dragging).
+
+**Second follow-up** (the above still deleted "a lot more than expected,"
+worst at minimum size — reported directly against the fix above): two
+compounding precision problems, both now fixed in `eraser.ts`.
+- **The half-width padding from the first fix was itself the over-erase
+  bug.** For a minimum-size eraser (radius 4) touching a Marker stroke
+  (width 10, half-width 5), the padding alone more than doubled the actual
+  erase reach beyond the visible circle — worse for smaller radii and
+  thicker brushes, exactly matching "smallest size is where it's easiest to
+  see." Removed entirely: the erase radius is now exact, matching the
+  on-screen heat-zone circle with no hidden bonus reach.
+- **Erase granularity was bound to the target stroke's original sample
+  spacing**, not to anything the user could see: touching any part of a
+  segment erased both of its full endpoints, so a quickly-drawn stroke
+  (sparse points, long segments) could lose far more per touch than a
+  slowly-drawn one — the "sometimes correct, sometimes not" the report
+  described. Fixed by locally subdividing only the segments near the eraser
+  (bounded to a small fixed spacing that scales with the eraser radius,
+  `radius / 3`) before testing, so precision no longer depends on how fast
+  the original stroke happened to be drawn. Segments far from the eraser are
+  left untouched at their original point count.
+- Added a dedicated precision regression test plus a real-browser check on
+  an actual thick Marker stroke: erasing at minimum size now clears a small,
+  precise circular footprint — full erasure dead-center, fully intact just
+  outside the radius, no blurry over-reach in between.
 
 ## Epic 6 — Layers
 
