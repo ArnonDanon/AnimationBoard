@@ -70,17 +70,26 @@ Goal: FR-AUTH-1..4.
 
 Goal: FR-ENGINE-1..6 — the foundation everything else builds on.
 
-- [ ] Document model defined as Yjs shared types (Timeline/Frame/Layer/VectorObject
+- [x] Document model defined as Yjs shared types (Timeline/Frame/Layer/VectorObject
       per `docs/01-domain-model.md`), instantiated as a local `Y.Doc` (no network yet)
-- [ ] Pointer Events capture (`pointerdown/move/up`) → `Point{x,y,pressure}` stream
-- [ ] Canvas2D renderer: paints current Frame's visible Layers (ADR-002)
-- [ ] Basic stroke rendering (fixed width, no pressure yet) to validate the pipeline
-      end to end: pointer → document → render
-- [ ] Selection: hit-testing via `isPointInPath`, select one/more objects
-- [ ] Transform: move/scale/rotate selected objects
-- [ ] Undo/redo (local command stack)
-- [ ] Serialize/deserialize the `Y.Doc` to/from a snapshot format (used later by
-      Persistence epic — build and unit-test it now while the model is fresh)
+      — `packages/drawing-engine/src/document.ts`, 8 unit tests passing
+- [x] Pointer Events capture (`pointerdown/move/up`) → `Point{x,y,pressure}` stream
+      — `input.ts`
+- [x] Canvas2D renderer: paints current Frame's visible Layers (ADR-002) —
+      `render.ts`
+- [x] Basic stroke rendering (fixed width, no pressure yet) to validate the pipeline
+      end to end: pointer → document → render — verified live: drawing renders,
+      972px stroke confirmed via pixel-alpha check
+- [x] Selection: hit-testing via `ctx.isPointInStroke` (the correct Canvas2D API
+      for stroked paths, not `isPointInPath` which tests fill regions), select
+      one object — `geometry.ts`. Multi-select deferred (not exercised by any
+      POC requirement yet)
+- [x] Transform: move (drag), scale/rotate (toolbar buttons, no gizmo — matches
+      FR-ENGINE-3's "not necessarily a full handle/gizmo UI") — all verified live
+- [x] Undo/redo — `Y.UndoManager` scoped to the frames tree, verified live
+- [x] Serialize/deserialize the `Y.Doc` to/from a snapshot format (used later by
+      Persistence epic) — `serialize.ts`, round-trip unit-tested now while the
+      model is fresh, per this task's own instruction
 
 ## Epic 4 — Brushes & Pressure
 

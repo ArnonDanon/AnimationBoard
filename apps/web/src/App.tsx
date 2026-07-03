@@ -1,11 +1,9 @@
-import { createEngine } from '@animationboard/drawing-engine'
 import { signOut } from 'aws-amplify/auth'
 import './auth/amplifyConfig'
 import { useAuth } from './auth/useAuth'
 import { AuthScreen } from './auth/AuthScreen'
+import { Editor } from './editor/Editor'
 import './App.css'
-
-const engine = createEngine()
 
 function App() {
   const { status, email } = useAuth()
@@ -19,13 +17,14 @@ function App() {
   }
 
   return (
-    <main className="scaffold">
-      <h1>AnimationBoard</h1>
-      <p>Signed in as <strong>{email}</strong>. <button onClick={() => signOut()}>Sign out</button></p>
-      <p>
-        <code>@animationboard/drawing-engine</code> says:{' '}
-        <strong>{engine.ping()}</strong>
-      </p>
+    <main className="app-shell">
+      <header className="app-header">
+        <h1>AnimationBoard</h1>
+        <p>
+          Signed in as <strong>{email}</strong>. <button onClick={() => signOut()}>Sign out</button>
+        </p>
+      </header>
+      <Editor animatorId={email ?? 'local'} />
     </main>
   )
 }
