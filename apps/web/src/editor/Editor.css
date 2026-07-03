@@ -26,6 +26,26 @@
   text-align: center;
 }
 
+.brush-button.active {
+  background: #3355dd;
+  color: #fff;
+  border-color: #3355dd;
+}
+
+.swatch {
+  width: 1.5rem;
+  height: 1.5rem;
+  border-radius: 50%;
+  border: 1px solid #999;
+  padding: 0;
+  cursor: pointer;
+}
+
+.swatch.active {
+  outline: 2px solid #3355dd;
+  outline-offset: 2px;
+}
+
 .editor-canvas {
   border: 1px solid #ccc;
   touch-action: none;

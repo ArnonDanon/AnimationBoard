@@ -17,16 +17,16 @@ import { paintSelectionOutline, paintStroke, renderFrame } from './render';
 import { createUndoManager } from './history';
 import { exportSnapshot as encodeSnapshot } from './serialize';
 import { rotateObject, scaleObject, translateObject } from './transform';
+import { DEFAULT_BRUSH, resolveStrokeStyle } from './brush';
+import { BUILT_IN_PALETTE } from './palette';
 import { DEFAULT_TRANSFORM } from './types';
-import type { Point, Style } from './types';
+import type { Brush, Point } from './types';
 
 export interface EngineOptions {
   canvas: HTMLCanvasElement;
   animatorId?: string;
   doc?: Y.Doc;
 }
-
-const DEFAULT_STYLE: Style = { color: '#000000', width: 3, opacity: 1 };
 
 export class DrawingEngine {
   readonly doc: Y.Doc;
@@ -41,6 +41,8 @@ export class DrawingEngine {
   private drawingPoints: Point[] | null = null;
   private selectedObjectId: string | null = null;
   private dragOrigin: Point | null = null;
+  private activeBrush: Brush = DEFAULT_BRUSH;
+  private activeColor: string = BUILT_IN_PALETTE[0];
 
   constructor(options: EngineOptions) {
     this.doc = options.doc ?? createDocument();
@@ -121,7 +123,7 @@ export class DrawingEngine {
     const obj = createVectorObject({
       kind: 'stroke',
       points,
-      style: { ...DEFAULT_STYLE },
+      style: resolveStrokeStyle(this.activeBrush, points, this.activeColor),
       transform: { ...DEFAULT_TRANSFORM },
       createdBy: this.animatorId,
     });
@@ -153,7 +155,8 @@ export class DrawingEngine {
   private renderWithLiveStroke(): void {
     renderFrame(this.ctx, this.canvas, this.activeFrame);
     if (this.drawingPoints) {
-      paintStroke(this.ctx, this.drawingPoints, DEFAULT_STYLE, DEFAULT_TRANSFORM);
+      const style = resolveStrokeStyle(this.activeBrush, this.drawingPoints, this.activeColor);
+      paintStroke(this.ctx, this.drawingPoints, style, DEFAULT_TRANSFORM);
     }
   }
 
@@ -184,6 +187,24 @@ export class DrawingEngine {
 
   hasSelection(): boolean {
     return this.selectedObjectId !== null;
+  }
+
+  getActiveBrush(): Brush {
+    return this.activeBrush;
+  }
+
+  setActiveBrush(brush: Brush): void {
+    this.activeBrush = brush;
+    this.notify();
+  }
+
+  getActiveColor(): string {
+    return this.activeColor;
+  }
+
+  setActiveColor(color: string): void {
+    this.activeColor = color;
+    this.notify();
   }
 
   addFrame(name?: string): void {

@@ -95,15 +95,33 @@ Goal: FR-ENGINE-1..6 — the foundation everything else builds on.
 
 Goal: FR-BRUSH-1..4.
 
-- [ ] Brush data structure (shape, width, opacity, pressure-sensitivity flag,
+- [x] Brush data structure (shape, width, opacity, pressure-sensitivity flag,
       pressure-affects width/opacity/both) — per Personal Library context in
-      `docs/01-domain-model.md`
-- [ ] 2–3 built-in brushes as static config (no DB row — see ADR-004 rationale)
-- [ ] Pressure → stroke width and/or opacity mapping for at least one brush
-- [ ] Brush style snapshotted into `VectorObject.style` at stroke-creation time
+      `docs/01-domain-model.md` — `types.ts` (`Brush`)
+- [x] 2–3 built-in brushes as static config (no DB row — see ADR-004 rationale)
+      — `brush.ts`: Pencil (width-sensitive), Marker (fixed), Ink Brush
+      (width+opacity-sensitive)
+- [x] Pressure → stroke width and/or opacity mapping for at least one brush —
+      `resolvePointWidth`/`resolveStrokeOpacity`, unit-tested; width varies
+      continuously per point, opacity varies per-stroke-average (Canvas2D has
+      no per-vertex alpha in one fill — see code comment for why that's a
+      reasonable POC scope cut, not a shortcut on the requirement)
+- [x] Brush style snapshotted into `VectorObject.style` at stroke-creation time
       (not a live reference — see domain model's cross-context integration note)
-- [ ] Brush + color selection UI (toolbar)
-- [ ] Built-in ~9-color palette (static config)
+      — `resolveStrokeStyle`, unit-tested that mutating the brush afterwards
+      doesn't affect an already-created stroke
+- [x] Brush + color selection UI (toolbar) — verified live: switching brush/color
+      updates active state and affects newly drawn strokes
+- [x] Built-in ~9-color palette (static config) — `palette.ts`, matches
+      `docs/00-requirements.md`'s POC palette exactly
+
+**Bug caught and fixed during verification** (not in the brush logic — in
+compositing): stroking many overlapping round-capped segments directly with
+`globalAlpha < 1` double-composites alpha at every overlap, so a translucent
+multi-point stroke rendered visibly darker/blotchier than its actual opacity
+(measured 250/255 instead of the correct 217/255 for 0.85 opacity). Fixed by
+painting the stroke opaque to an offscreen layer first, then compositing that
+layer once with the real opacity — reverified pixel-exact after the fix.
 
 ## Epic 5 — Eraser
 

@@ -21,16 +21,59 @@ export function withObjectTransform(ctx: CanvasRenderingContext2D, transform: Tr
   ctx.restore();
 }
 
-export function paintStroke(ctx: CanvasRenderingContext2D, points: Point[], style: Style, transform: Transform): void {
-  const path = buildStrokePath(points);
+function paintStrokeSegments(ctx: CanvasRenderingContext2D, points: Point[], style: Style, transform: Transform): void {
   withObjectTransform(ctx, transform, () => {
     ctx.strokeStyle = style.color;
-    ctx.lineWidth = style.width;
-    ctx.globalAlpha = style.opacity;
+    ctx.fillStyle = style.color;
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
-    ctx.stroke(path);
+
+    if (points.length === 1) {
+      const radius = (style.widths?.[0] ?? style.width) / 2;
+      ctx.beginPath();
+      ctx.arc(points[0].x, points[0].y, radius, 0, Math.PI * 2);
+      ctx.fill();
+      return;
+    }
+
+    // Pressure-sensitive width varies per point, so each segment is stroked with its
+    // own interpolated width and round caps — much simpler than building a mitered
+    // variable-width outline polygon, and visually equivalent for a POC brush.
+    const widths = style.widths && style.widths.length === points.length ? style.widths : points.map(() => style.width);
+    for (let i = 1; i < points.length; i++) {
+      ctx.lineWidth = (widths[i - 1] + widths[i]) / 2;
+      ctx.beginPath();
+      ctx.moveTo(points[i - 1].x, points[i - 1].y);
+      ctx.lineTo(points[i].x, points[i].y);
+      ctx.stroke();
+    }
   });
+}
+
+export function paintStroke(ctx: CanvasRenderingContext2D, points: Point[], style: Style, transform: Transform): void {
+  if (points.length === 0) return;
+
+  // Adjacent round-capped segments overlap where they join, so stroking them
+  // directly with globalAlpha < 1 double-composites alpha at every overlap,
+  // making a translucent stroke look blotchy instead of uniformly translucent.
+  // Painting the whole stroke opaque on an offscreen layer first, then
+  // compositing that layer once with the style's opacity, avoids it.
+  if (style.opacity >= 1) {
+    paintStrokeSegments(ctx, points, style, transform);
+    return;
+  }
+
+  const layer = document.createElement('canvas');
+  layer.width = ctx.canvas.width;
+  layer.height = ctx.canvas.height;
+  const layerCtx = layer.getContext('2d');
+  if (!layerCtx) return;
+  paintStrokeSegments(layerCtx, points, style, transform);
+
+  ctx.save();
+  ctx.globalAlpha = style.opacity;
+  ctx.drawImage(layer, 0, 0);
+  ctx.restore();
 }
 
 export function getBoundingBox(points: Point[]): { minX: number; minY: number; maxX: number; maxY: number } {

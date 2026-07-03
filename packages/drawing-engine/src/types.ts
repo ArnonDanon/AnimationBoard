@@ -6,8 +6,25 @@ export interface Point {
 
 export interface Style {
   color: string;
+  /** Representative width — used for hit-testing and as a fallback when `widths` is absent. */
   width: number;
+  /** Per-point rendered width (same length as the stroke's points), for pressure-sensitive width. */
+  widths?: number[];
   opacity: number;
+}
+
+export type PressureAffects = 'width' | 'opacity' | 'both';
+
+export interface Brush {
+  id: string;
+  /** null = built-in/system brush, per the Personal Library context's ownership model. */
+  ownerId: string | null;
+  name: string;
+  shape: 'round';
+  baseWidth: number;
+  opacity: number;
+  pressureSensitive: boolean;
+  pressureAffects: PressureAffects;
 }
 
 export interface Transform {
