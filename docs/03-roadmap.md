@@ -158,6 +158,34 @@ itself:**
   a future bug report says "the very start of every mouse stroke looks a bit
   thin."
 
+**Follow-up fixes from real usage feedback** (dense scribbles not reliably
+erasing at minimum size):
+- **Real bug in the erase geometry**: `isErased` only tested each stroke's
+  discrete sample *points* against the eraser path, never the *segments*
+  between them. A fast/coarse stroke has widely-spaced points, so the eraser
+  could visually cross the rendered line between two points without being
+  close enough to either point to register. Fixed with proper segment-to-path
+  distance testing (including a real segment-intersection check), plus
+  widening the effective radius by the stroke's own half-width so thick
+  strokes erase even when the eraser center is slightly off their centerline.
+  9 new/updated unit tests, including one that reproduces the exact gap-cross
+  scenario.
+- **Deeper root cause of the reported symptom, unrelated to erasing at all**:
+  the Brush tool's `pointerdown` hit-tested existing objects before deciding
+  to draw, so starting a new stroke close to an existing one (exactly what a
+  dense scribble does) would silently select-and-drag that existing stroke
+  instead of drawing a new one — corrupting the scribble one stroke at a time
+  while it was still being drawn, before the eraser was ever involved. Fixed
+  by splitting selection into its own explicit **Select** tool (alongside
+  Brush/Eraser); the Brush tool now always draws, never hit-tests. Confirmed
+  live: 10 closely-packed lines now draw independently and the eraser at
+  minimum size correctly touches every one of them.
+- Added on-canvas eraser cursor feedback per request: a thin crosshair at the
+  exact hot-point plus a translucent "heat zone" disc showing the effective
+  radius, scaling live with the size slider — shown on hover, not just while
+  actively erasing (required extending pointer capture to track hover moves,
+  separate from the drag-only moves used for drawing/erasing/dragging).
+
 ## Epic 6 — Layers
 
 Goal: FR-LAYER-1..5.

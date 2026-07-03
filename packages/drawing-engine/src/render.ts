@@ -116,6 +116,34 @@ export function paintStroke(ctx: CanvasRenderingContext2D, points: Point[], styl
   ctx.restore();
 }
 
+// A translucent "heat zone" disc showing exactly what the eraser's radius will
+// reach, plus a thin crosshair pinpointing the exact center — the disc scales
+// with the eraser size, so it's obvious at a glance whether it'll reach a stroke.
+export function paintEraserCursor(ctx: CanvasRenderingContext2D, point: { x: number; y: number }, radius: number): void {
+  ctx.save();
+  ctx.globalAlpha = 1;
+
+  ctx.beginPath();
+  ctx.arc(point.x, point.y, radius, 0, Math.PI * 2);
+  ctx.fillStyle = 'rgba(230, 40, 40, 0.16)';
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(200, 20, 20, 0.85)';
+  ctx.lineWidth = 1;
+  ctx.stroke();
+
+  const armLength = 5;
+  ctx.strokeStyle = 'rgba(200, 20, 20, 0.95)';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(point.x - armLength, point.y);
+  ctx.lineTo(point.x + armLength, point.y);
+  ctx.moveTo(point.x, point.y - armLength);
+  ctx.lineTo(point.x, point.y + armLength);
+  ctx.stroke();
+
+  ctx.restore();
+}
+
 export function getBoundingBox(points: Point[]): { minX: number; minY: number; maxX: number; maxY: number } {
   const xs = points.map((p) => p.x);
   const ys = points.map((p) => p.y);

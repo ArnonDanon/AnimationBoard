@@ -32,6 +32,57 @@ export function distanceToPath(p: { x: number; y: number }, path: { x: number; y
   return min;
 }
 
+function segmentsIntersect(
+  p1: { x: number; y: number },
+  p2: { x: number; y: number },
+  p3: { x: number; y: number },
+  p4: { x: number; y: number },
+): boolean {
+  const cross = (o: { x: number; y: number }, a: { x: number; y: number }, b: { x: number; y: number }) =>
+    (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x);
+  const onSegment = (a: { x: number; y: number }, p: { x: number; y: number }, b: { x: number; y: number }) =>
+    Math.min(a.x, b.x) <= p.x && p.x <= Math.max(a.x, b.x) && Math.min(a.y, b.y) <= p.y && p.y <= Math.max(a.y, b.y);
+
+  const d1 = cross(p3, p4, p1);
+  const d2 = cross(p3, p4, p2);
+  const d3 = cross(p1, p2, p3);
+  const d4 = cross(p1, p2, p4);
+  if (((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0)) && ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0))) return true;
+  if (d1 === 0 && onSegment(p3, p1, p4)) return true;
+  if (d2 === 0 && onSegment(p3, p2, p4)) return true;
+  if (d3 === 0 && onSegment(p1, p3, p2)) return true;
+  if (d4 === 0 && onSegment(p1, p4, p2)) return true;
+  return false;
+}
+
+// Distance between two line segments — the minimum of the four endpoint-to-opposite-segment
+// distances, or zero if they cross. Needed because two segments can pass right through each
+// other without either one's endpoints coming close to the other's endpoints.
+function distanceSegmentToSegment(
+  a1: { x: number; y: number },
+  a2: { x: number; y: number },
+  b1: { x: number; y: number },
+  b2: { x: number; y: number },
+): number {
+  if (segmentsIntersect(a1, a2, b1, b2)) return 0;
+  return Math.min(
+    distanceToSegment(a1, b1, b2),
+    distanceToSegment(a2, b1, b2),
+    distanceToSegment(b1, a1, a2),
+    distanceToSegment(b2, a1, a2),
+  );
+}
+
+function minDistanceSegmentToPath(a1: { x: number; y: number }, a2: { x: number; y: number }, path: { x: number; y: number }[]): number {
+  if (path.length === 0) return Infinity;
+  if (path.length === 1) return distanceToSegment(path[0], a1, a2);
+  let min = Infinity;
+  for (let i = 1; i < path.length; i++) {
+    min = Math.min(min, distanceSegmentToSegment(a1, a2, path[i - 1], path[i]));
+  }
+  return min;
+}
+
 // Groups surviving (non-erased) indices into consecutive runs — each run becomes its
 // own stroke fragment, which is how a single erase pass can split one stroke into two.
 export function splitSurvivingRuns(count: number, isErased: (index: number) => boolean): number[][] {
@@ -61,7 +112,28 @@ export function eraseFromObjectData(
   eraseRadius: number,
 ): Omit<VectorObjectData, 'id'>[] | null {
   const worldPoints = data.points.map((p) => applyTransform(p, data.transform));
-  const isErased = (i: number) => distanceToPath(worldPoints[i], erasePath) <= eraseRadius;
+  const widthAt = (i: number) => data.style.widths?.[i] ?? data.style.width;
+
+  // Test the stroke's own rendered *segments* against the eraser path, not just its
+  // sample points — otherwise a fast/coarse stroke with widely-spaced points can be
+  // visually crossed by the eraser without either endpoint being close enough to
+  // register. Also widen the test by the segment's own half-width, since a thick
+  // stroke's visible ink extends past its centerline.
+  const erased = new Array<boolean>(worldPoints.length).fill(false);
+  if (worldPoints.length === 1) {
+    const effectiveRadius = eraseRadius + widthAt(0) / 2;
+    if (distanceToPath(worldPoints[0], erasePath) <= effectiveRadius) erased[0] = true;
+  } else {
+    for (let i = 1; i < worldPoints.length; i++) {
+      const effectiveRadius = eraseRadius + (widthAt(i - 1) + widthAt(i)) / 4;
+      if (minDistanceSegmentToPath(worldPoints[i - 1], worldPoints[i], erasePath) <= effectiveRadius) {
+        erased[i - 1] = true;
+        erased[i] = true;
+      }
+    }
+  }
+
+  const isErased = (i: number) => erased[i];
   const runs = splitSurvivingRuns(data.points.length, isErased);
   const survivingCount = runs.reduce((sum, r) => sum + r.length, 0);
   if (survivingCount === data.points.length) return null;

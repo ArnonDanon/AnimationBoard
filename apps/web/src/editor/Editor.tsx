@@ -56,6 +56,12 @@ export function Editor({ animatorId }: EditorProps) {
           Brush
         </button>
         <button
+          className={activeTool === 'select' ? 'brush-button active' : 'brush-button'}
+          onClick={() => engine?.setActiveTool('select')}
+        >
+          Select
+        </button>
+        <button
           className={activeTool === 'eraser' ? 'brush-button active' : 'brush-button'}
           onClick={() => engine?.setActiveTool('eraser')}
         >
@@ -98,7 +104,12 @@ export function Editor({ animatorId }: EditorProps) {
         ))}
       </div>
 
-      <canvas ref={canvasRef} width={900} height={560} className={activeTool === 'eraser' ? 'editor-canvas erasing' : 'editor-canvas'} />
+      <canvas
+        ref={canvasRef}
+        width={900}
+        height={560}
+        className={activeTool === 'eraser' ? 'editor-canvas erasing' : `editor-canvas ${activeTool}`}
+      />
     </div>
   )
 }

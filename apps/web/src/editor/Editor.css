@@ -61,6 +61,11 @@
   background: #ffffff;
 }
 
+.editor-canvas.select {
+  cursor: default;
+}
+
 .editor-canvas.erasing {
-  cursor: cell;
+  /* the engine draws its own crosshair + heat-zone circle for the eraser */
+  cursor: none;
 }

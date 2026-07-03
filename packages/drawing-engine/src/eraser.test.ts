@@ -4,12 +4,12 @@ import { addLayer, createDocument, createVectorObject, getFramesArray, getLayers
 import { DEFAULT_TRANSFORM } from './types';
 import type { VectorObjectData } from './types';
 
-function makeStroke(points: { x: number; y: number }[]): VectorObjectData {
+function makeStroke(points: { x: number; y: number }[], width = 0): VectorObjectData {
   return {
     id: 'stroke-1',
     kind: 'stroke',
     points: points.map((p) => ({ ...p, pressure: 1 })),
-    style: { color: '#000', width: 4, opacity: 1 },
+    style: { color: '#000', width, opacity: 1 },
     transform: { ...DEFAULT_TRANSFORM },
     createdBy: 'animator-1',
   };
@@ -28,40 +28,65 @@ describe('eraseFromObjectData', () => {
     expect(result).toEqual([]);
   });
 
-  it('splits a stroke into two fragments when the eraser cuts through the middle', () => {
-    const stroke = makeStroke([{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 20, y: 0 }, { x: 30, y: 0 }, { x: 40, y: 0 }]);
-    const result = eraseFromObjectData(stroke, [{ x: 20, y: 0 }], 3);
-    expect(result).toHaveLength(2);
-    expect(result![0].points.map((p) => p.x)).toEqual([0, 10]);
-    expect(result![1].points.map((p) => p.x)).toEqual([30, 40]);
+  it('erases a stroke even when the eraser passes through the middle of a segment, nowhere near any sample point', () => {
+    // This is the bug: two points far apart (as a fast/coarse pointer drag produces),
+    // with the eraser sitting right on top of the rendered line between them. A
+    // point-only distance check would miss this (both points are 50px away); the
+    // fix tests the segment itself.
+    const stroke = makeStroke([{ x: 0, y: 0 }, { x: 100, y: 0 }]);
+    const result = eraseFromObjectData(stroke, [{ x: 50, y: 0 }], 5);
+    expect(result).toEqual([]);
   });
 
-  it('trims just one end when the eraser only touches the tail', () => {
-    const stroke = makeStroke([{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 20, y: 0 }]);
-    const result = eraseFromObjectData(stroke, [{ x: 20, y: 0 }], 3);
+  it('widens the hit test by the stroke half-width, so a thick stroke erases even when the eraser center is off its centerline', () => {
+    const stroke = makeStroke([{ x: 0, y: 0 }, { x: 100, y: 0 }, { x: 1000, y: 0 }], 20); // half-width 10
+    const missesWithoutPadding = eraseFromObjectData(
+      makeStroke([{ x: 0, y: 0 }, { x: 100, y: 0 }, { x: 1000, y: 0 }], 0),
+      [{ x: 50, y: 8 }],
+      2,
+    );
+    expect(missesWithoutPadding).toBeNull(); // 8px off centerline, radius 2, hairline stroke: genuinely misses
+
+    const hitsWithPadding = eraseFromObjectData(stroke, [{ x: 50, y: 8 }], 2);
+    expect(hitsWithPadding).toHaveLength(1);
+    expect(hitsWithPadding![0].points[0].x).toBe(1000); // the untouched far point survives
+  });
+
+  it('splits a stroke into two fragments when the eraser cuts through one segment in the middle', () => {
+    const stroke = makeStroke([{ x: 0, y: 0 }, { x: 50, y: 0 }, { x: 100, y: 0 }, { x: 150, y: 0 }, { x: 200, y: 0 }]);
+    const result = eraseFromObjectData(stroke, [{ x: 125, y: 0 }], 4);
+    expect(result).toHaveLength(2);
+    expect(result![0].points.map((p) => p.x)).toEqual([0, 50]);
+    expect(result![1].points.map((p) => p.x)).toEqual([200]);
+  });
+
+  it('trims the tail when the eraser only touches the last segment', () => {
+    const stroke = makeStroke([{ x: 0, y: 0 }, { x: 50, y: 0 }, { x: 100, y: 0 }, { x: 150, y: 0 }]);
+    const result = eraseFromObjectData(stroke, [{ x: 140, y: 0 }], 4);
     expect(result).toHaveLength(1);
-    expect(result![0].points.map((p) => p.x)).toEqual([0, 10]);
+    expect(result![0].points.map((p) => p.x)).toEqual([0, 50]);
   });
 
   it('bakes the object transform into surviving fragment points and resets to identity', () => {
-    const stroke = makeStroke([{ x: 0, y: 0 }, { x: 10, y: 0 }]);
+    const stroke = makeStroke([{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 1000, y: 0 }]);
     stroke.transform = { x: 100, y: 50, scaleX: 1, scaleY: 1, rotation: 0 };
-    const result = eraseFromObjectData(stroke, [{ x: 9999, y: 9999 }], 3); // misses in world space
-    expect(result).toBeNull(); // untouched since eraser is nowhere near the translated stroke
 
-    const hit = eraseFromObjectData(stroke, [{ x: 100, y: 50 }], 3); // right at the translated first point
+    const missed = eraseFromObjectData(stroke, [{ x: 9999, y: 9999 }], 3);
+    expect(missed).toBeNull();
+
+    const hit = eraseFromObjectData(stroke, [{ x: 100, y: 50 }], 3);
     expect(hit).toHaveLength(1);
     expect(hit![0].transform).toEqual(DEFAULT_TRANSFORM);
-    expect(hit![0].points[0].x).toBe(110); // 10 (local) + 100 (translate) — the surviving second point
+    expect(hit![0].points[0].x).toBe(1100); // 1000 (local) + 100 (translate) — the surviving far point
   });
 
   it('slices per-point widths so a pressure-sensitive stroke keeps its correct widths after a split', () => {
-    const stroke = makeStroke([{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 20, y: 0 }]);
-    stroke.style.widths = [2, 4, 6];
-    const result = eraseFromObjectData(stroke, [{ x: 10, y: 0 }], 3);
+    const stroke = makeStroke([{ x: 0, y: 0 }, { x: 50, y: 0 }, { x: 100, y: 0 }, { x: 150, y: 0 }, { x: 200, y: 0 }]);
+    stroke.style.widths = [2, 4, 6, 8, 10];
+    const result = eraseFromObjectData(stroke, [{ x: 125, y: 0 }], 2);
     expect(result).toHaveLength(2);
-    expect(result![0].style.widths).toEqual([2]);
-    expect(result![1].style.widths).toEqual([6]);
+    expect(result![0].style.widths).toEqual([2, 4]);
+    expect(result![1].style.widths).toEqual([10]);
   });
 });
 
@@ -86,9 +111,11 @@ describe('eraseFromLayer', () => {
     const doc = createDocument();
     const layer = getLayersArray(getFramesArray(doc).get(0)).get(0);
     const objects = getObjectsArray(layer);
-    objects.push([createVectorObject(makeStroke([{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 20, y: 0 }, { x: 30, y: 0 }]))]);
+    objects.push([
+      createVectorObject(makeStroke([{ x: 0, y: 0 }, { x: 50, y: 0 }, { x: 100, y: 0 }, { x: 150, y: 0 }, { x: 200, y: 0 }])),
+    ]);
 
-    eraseFromLayer(layer, [{ x: 20, y: 0 }], 3);
+    eraseFromLayer(layer, [{ x: 125, y: 0 }], 4);
 
     expect(objects.length).toBe(2);
   });

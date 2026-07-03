@@ -13,7 +13,7 @@ import {
 import type { YFrame, YObject } from './document';
 import { attachPointerCapture } from './input';
 import { hitTestFrame } from './geometry';
-import { paintSelectionOutline, paintStroke, renderFrame } from './render';
+import { paintEraserCursor, paintSelectionOutline, paintStroke, renderFrame } from './render';
 import { createUndoManager } from './history';
 import { exportSnapshot as encodeSnapshot } from './serialize';
 import { rotateObject, scaleObject, translateObject } from './transform';
@@ -49,6 +49,7 @@ export class DrawingEngine {
   private activeTool: Tool = 'brush';
   private eraserRadius = DEFAULT_ERASER_RADIUS;
   private lastErasePoint: Point | null = null;
+  private hoverPoint: Point | null = null;
 
   constructor(options: EngineOptions) {
     this.doc = options.doc ?? createDocument();
@@ -64,6 +65,8 @@ export class DrawingEngine {
       onStart: (p) => this.handlePointerStart(p),
       onMove: (p) => this.handlePointerMove(p),
       onEnd: (p) => this.handlePointerEnd(p),
+      onHover: (p) => this.handleHover(p),
+      onHoverEnd: () => this.handleHoverEnd(),
     });
 
     this.render();
@@ -88,14 +91,18 @@ export class DrawingEngine {
       return;
     }
 
-    const hit = hitTestFrame(this.ctx, this.activeFrame, p.x, p.y);
-    if (hit) {
-      this.selectedObjectId = vectorObjectToData(hit).id;
-      this.dragOrigin = p;
+    if (this.activeTool === 'select') {
+      const hit = hitTestFrame(this.ctx, this.activeFrame, p.x, p.y);
+      this.selectedObjectId = hit ? vectorObjectToData(hit).id : null;
+      this.dragOrigin = hit ? p : null;
       this.notify();
       return;
     }
-    this.selectedObjectId = null;
+
+    // Brush tool always starts a new stroke — it never hit-tests existing objects.
+    // (It used to, which meant starting a stroke close to an existing one would
+    // silently select-and-drag that object instead of drawing, corrupting a dense
+    // scribble one stroke at a time. Selecting/moving is now Select tool's job only.)
     const layer = this.activeLayer;
     if (!layer || !isLayerEditable(layer)) {
       this.notify();
@@ -148,6 +155,18 @@ export class DrawingEngine {
     eraseFromLayer(layer, path, this.eraserRadius);
   }
 
+  private handleHover(p: Point): void {
+    this.hoverPoint = p;
+    // A full notify() would re-fire every UI listener on every mouse pixel of
+    // movement; a direct render() keeps the cursor smooth without that overhead.
+    if (this.activeTool === 'eraser') this.render();
+  }
+
+  private handleHoverEnd(): void {
+    this.hoverPoint = null;
+    if (this.activeTool === 'eraser') this.render();
+  }
+
   private commitStroke(points: Point[]): void {
     const layer = this.activeLayer;
     if (!layer || !isLayerEditable(layer)) return;
@@ -180,6 +199,9 @@ export class DrawingEngine {
         const data = vectorObjectToData(obj);
         paintSelectionOutline(this.ctx, data.points, data.transform);
       }
+    }
+    if (this.activeTool === 'eraser' && this.hoverPoint) {
+      paintEraserCursor(this.ctx, this.hoverPoint, this.eraserRadius);
     }
   }
 
