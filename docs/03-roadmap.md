@@ -218,6 +218,23 @@ still leaving everything well outside `radius + half-width` untouched.
 Verified live on both Marker and Ink Brush, including at minimum eraser
 size (the case that first exposed all three of these bugs).
 
+**Known limitation, deliberately not fixed (user decision 2026-07-04):**
+touching *any* part of a thick stroke's rendered width — even just grazing
+the edge — deletes that whole centerline segment at its *full* width. There
+is no partial-width shaving: a `VectorObject` is a centerline (point list)
+plus a scalar width per point, not a filled shape, so there is no way to
+represent "the top half of this ink is erased, the bottom half survives and
+is now off-center from the original line." A true fix means storing strokes
+as filled polygon outlines and doing real boolean subtraction (clip the
+eraser's disc out of the fill shape) — a rearchitecture of `VectorObject`,
+not a tunable in `eraser.ts`. Decided to leave this for the POC and revisit
+post-POC if warranted, rather than take on that rearchitecture now.
+
+**Noted for later, explicitly out of current scope:** an opacity-based
+eraser mode (fades ink toward transparent rather than removing geometry —
+useful for soft/blended erasing). User wants this as a future enhancement,
+not part of the POC.
+
 ## Epic 6 — Layers
 
 Goal: FR-LAYER-1..5.

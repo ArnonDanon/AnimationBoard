@@ -230,6 +230,12 @@ Tracked so the architecture accounts for them without building them now:
 - Tilt/twist/barrel-button brush behaviors
 - Export (video/GIF/image sequence) beyond in-app playback
 - Non-Chromium/mobile platform support
+- Opacity-based eraser (fades ink toward transparent rather than removing
+  geometry) — requested for a future iteration, not the POC
+- True partial-width erasing (shaving part of a thick stroke's rendered
+  width rather than deleting the whole touched segment) — would require
+  storing strokes as filled polygons with real boolean subtraction instead
+  of the current centerline+width model; deliberately deferred past the POC
 
 ## 5. Assumptions
 
