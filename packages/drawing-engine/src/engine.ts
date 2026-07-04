@@ -97,6 +97,7 @@ export class DrawingEngine {
   private lastErasePoint: Point | null = null;
   private hoverPoint: Point | null = null;
   private playbackTimer: ReturnType<typeof setInterval> | null = null;
+  private playbackStartFrameIndex: number | null = null;
   // Personal viewing preference, not project content — not persisted, same category
   // as brush size/opacity overrides above.
   private onionSkinEnabled = false;
@@ -303,8 +304,11 @@ export class DrawingEngine {
   // Clears and paints the current frame's real content, with the dimmed previous
   // frame underneath when onion skin is on — shared by render() and the two
   // live-preview variants so the onion overlay never disappears mid-drag.
+  // Suppressed during playback (checked fresh each call, not a separate saved/restored
+  // flag) so the animation preview shows only real frame content — the toggle itself
+  // is untouched, so onion resumes automatically the moment playback stops.
   private paintBase(): void {
-    if (!this.onionSkinEnabled) {
+    if (!this.onionSkinEnabled || this.getIsPlaying()) {
       renderFrame(this.ctx, this.canvas, this.activeFrame);
       return;
     }
@@ -509,11 +513,24 @@ export class DrawingEngine {
   play(): void {
     if (this.playbackTimer || this.getFrameCount() <= 1) return;
     if (this.activeFrameIndex >= this.getFrameCount() - 1) this.setFrameIndexRaw(0);
+    // Remembered so playback reaching the natural end can return here — but only
+    // the natural end does this; a manual pause() mid-playback leaves the
+    // playhead where the user stopped it (see pause()).
+    this.playbackStartFrameIndex = this.activeFrameIndex;
     const intervalMs = 1000 / this.getFps();
     this.playbackTimer = setInterval(() => {
       const next = this.activeFrameIndex + 1;
       if (next >= this.getFrameCount()) {
-        this.pause();
+        // Not this.pause(): that would notify once with the last frame still
+        // active, before also snapping back — inlined here so there's exactly one
+        // notify(), already showing the returned-to frame.
+        clearInterval(this.playbackTimer!);
+        this.playbackTimer = null;
+        if (this.playbackStartFrameIndex !== null) {
+          this.setFrameIndexRaw(this.playbackStartFrameIndex);
+        }
+        this.playbackStartFrameIndex = null;
+        this.notify();
         return;
       }
       this.setFrameIndexRaw(next);
