@@ -1,8 +1,226 @@
-import type { APIGatewayProxyHandlerV2 } from 'aws-lambda';
+import type { APIGatewayProxyHandlerV2WithJWTAuthorizer, APIGatewayProxyEventV2WithJWTAuthorizer, APIGatewayProxyResultV2 } from 'aws-lambda';
+import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
+import { BatchGetCommand, DeleteCommand, DynamoDBDocumentClient, GetCommand, PutCommand, QueryCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
+import { GetObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
+import { CognitoIdentityProviderClient, ListUsersCommand } from '@aws-sdk/client-cognito-identity-provider';
+import { createDocument, exportSnapshot } from '@animationboard/drawing-engine';
 
-export const handler: APIGatewayProxyHandlerV2 = async () => {
-  return {
-    statusCode: 200,
-    body: JSON.stringify({ message: 'AnimationBoard API stub — Epic 1 scaffold' }),
-  };
+const ddb = DynamoDBDocumentClient.from(new DynamoDBClient({}));
+const s3 = new S3Client({});
+const cognito = new CognitoIdentityProviderClient({});
+
+const PROJECTS_TABLE = process.env.PROJECTS_TABLE!;
+const MEMBERS_TABLE = process.env.MEMBERS_TABLE!;
+const DOCUMENTS_BUCKET = process.env.DOCUMENTS_BUCKET!;
+const USER_POOL_ID = process.env.USER_POOL_ID!;
+
+// Matches the Project aggregate invariant in docs/01-domain-model.md (owner + up to 2
+// collaborators for the POC).
+const MAX_MEMBERS = 3;
+
+interface Membership {
+  projectId: string;
+  animatorId: string;
+  role: 'owner' | 'collaborator';
+  invitedAt: string;
+}
+
+function respond(statusCode: number, body: unknown): APIGatewayProxyResultV2 {
+  return { statusCode, headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) };
+}
+
+function getCallerId(event: APIGatewayProxyEventV2WithJWTAuthorizer): string {
+  return String(event.requestContext.authorizer.jwt.claims.sub);
+}
+
+function documentKey(projectId: string): string {
+  return `documents/${projectId}.bin`;
+}
+
+function parseBody(event: APIGatewayProxyEventV2WithJWTAuthorizer): Record<string, unknown> {
+  try {
+    return event.body ? JSON.parse(event.body) : {};
+  } catch {
+    return {};
+  }
+}
+
+async function getMembership(projectId: string, animatorId: string): Promise<Membership | undefined> {
+  const result = await ddb.send(new GetCommand({ TableName: MEMBERS_TABLE, Key: { projectId, animatorId } }));
+  return result.Item as Membership | undefined;
+}
+
+async function getMembers(projectId: string): Promise<Membership[]> {
+  const result = await ddb.send(
+    new QueryCommand({
+      TableName: MEMBERS_TABLE,
+      KeyConditionExpression: 'projectId = :p',
+      ExpressionAttributeValues: { ':p': projectId },
+    }),
+  );
+  return (result.Items ?? []) as Membership[];
+}
+
+async function createProject(event: APIGatewayProxyEventV2WithJWTAuthorizer, callerId: string): Promise<APIGatewayProxyResultV2> {
+  const body = parseBody(event);
+  const name = typeof body.name === 'string' && body.name.trim() ? body.name.trim() : 'Untitled Project';
+  const projectId = crypto.randomUUID();
+  const now = new Date().toISOString();
+
+  await ddb.send(new PutCommand({ TableName: PROJECTS_TABLE, Item: { projectId, name, ownerId: callerId, createdAt: now, updatedAt: now } }));
+  await ddb.send(new PutCommand({ TableName: MEMBERS_TABLE, Item: { projectId, animatorId: callerId, role: 'owner', invitedAt: now } }));
+
+  // Seed an empty document immediately so load-document never has to special-case
+  // "project exists but nothing was ever saved yet".
+  await s3.send(new PutObjectCommand({ Bucket: DOCUMENTS_BUCKET, Key: documentKey(projectId), Body: Buffer.from(exportSnapshot(createDocument())) }));
+
+  return respond(201, { projectId, name, ownerId: callerId, createdAt: now, updatedAt: now, role: 'owner' });
+}
+
+async function listProjects(callerId: string): Promise<APIGatewayProxyResultV2> {
+  const memberships = await ddb.send(
+    new QueryCommand({
+      TableName: MEMBERS_TABLE,
+      IndexName: 'byAnimator',
+      KeyConditionExpression: 'animatorId = :a',
+      ExpressionAttributeValues: { ':a': callerId },
+    }),
+  );
+  const items = (memberships.Items ?? []) as Membership[];
+  if (items.length === 0) return respond(200, { projects: [] });
+
+  const batch = await ddb.send(new BatchGetCommand({ RequestItems: { [PROJECTS_TABLE]: { Keys: items.map((m) => ({ projectId: m.projectId })) } } }));
+  const projectsById = new Map((batch.Responses?.[PROJECTS_TABLE] ?? []).map((p) => [p.projectId as string, p]));
+  const projects = items.map((m) => ({ ...projectsById.get(m.projectId), role: m.role })).filter((p) => p.projectId);
+
+  return respond(200, { projects });
+}
+
+async function getProject(projectId: string, callerId: string): Promise<APIGatewayProxyResultV2> {
+  const membership = await getMembership(projectId, callerId);
+  if (!membership) return respond(403, { error: 'not a member of this project' });
+
+  const project = await ddb.send(new GetCommand({ TableName: PROJECTS_TABLE, Key: { projectId } }));
+  if (!project.Item) return respond(404, { error: 'project not found' });
+
+  const members = await getMembers(projectId);
+  return respond(200, { ...project.Item, role: membership.role, members });
+}
+
+async function renameProject(event: APIGatewayProxyEventV2WithJWTAuthorizer, projectId: string, callerId: string): Promise<APIGatewayProxyResultV2> {
+  const membership = await getMembership(projectId, callerId);
+  if (!membership) return respond(403, { error: 'not a member of this project' });
+
+  const body = parseBody(event);
+  const name = typeof body.name === 'string' ? body.name.trim() : '';
+  if (!name) return respond(400, { error: 'name is required' });
+
+  await ddb.send(
+    new UpdateCommand({
+      TableName: PROJECTS_TABLE,
+      Key: { projectId },
+      UpdateExpression: 'SET #name = :name, updatedAt = :now',
+      ExpressionAttributeNames: { '#name': 'name' },
+      ExpressionAttributeValues: { ':name': name, ':now': new Date().toISOString() },
+    }),
+  );
+  return respond(200, { ok: true });
+}
+
+async function deleteProject(projectId: string, callerId: string): Promise<APIGatewayProxyResultV2> {
+  const membership = await getMembership(projectId, callerId);
+  if (!membership || membership.role !== 'owner') return respond(403, { error: 'only the owner can delete this project' });
+
+  const members = await getMembers(projectId);
+  await Promise.all(members.map((m) => ddb.send(new DeleteCommand({ TableName: MEMBERS_TABLE, Key: { projectId, animatorId: m.animatorId } }))));
+  await ddb.send(new DeleteCommand({ TableName: PROJECTS_TABLE, Key: { projectId } }));
+  return respond(200, { ok: true });
+}
+
+async function shareProject(event: APIGatewayProxyEventV2WithJWTAuthorizer, projectId: string, callerId: string): Promise<APIGatewayProxyResultV2> {
+  const membership = await getMembership(projectId, callerId);
+  if (!membership || membership.role !== 'owner') return respond(403, { error: 'only the owner can share this project' });
+
+  const body = parseBody(event);
+  const email = typeof body.email === 'string' ? body.email.trim().toLowerCase() : '';
+  if (!email) return respond(400, { error: 'email is required' });
+
+  const members = await getMembers(projectId);
+  if (members.length >= MAX_MEMBERS) return respond(409, { error: `projects are limited to ${MAX_MEMBERS} members in this POC` });
+
+  const users = await cognito.send(new ListUsersCommand({ UserPoolId: USER_POOL_ID, Filter: `email = "${email}"`, Limit: 1 }));
+  const sub = users.Users?.[0]?.Attributes?.find((a) => a.Name === 'sub')?.Value;
+  if (!sub) return respond(404, { error: 'no registered user with that email' });
+
+  if (await getMembership(projectId, sub)) return respond(409, { error: 'already a member of this project' });
+
+  await ddb.send(new PutCommand({ TableName: MEMBERS_TABLE, Item: { projectId, animatorId: sub, role: 'collaborator', invitedAt: new Date().toISOString() } }));
+  return respond(201, { ok: true });
+}
+
+async function loadDocument(projectId: string, callerId: string): Promise<APIGatewayProxyResultV2> {
+  const membership = await getMembership(projectId, callerId);
+  if (!membership) return respond(403, { error: 'not a member of this project' });
+
+  try {
+    const obj = await s3.send(new GetObjectCommand({ Bucket: DOCUMENTS_BUCKET, Key: documentKey(projectId) }));
+    const bytes = await obj.Body!.transformToByteArray();
+    return respond(200, { snapshot: Buffer.from(bytes).toString('base64') });
+  } catch (err) {
+    if (err instanceof Error && err.name === 'NoSuchKey') return respond(404, { error: 'document not found' });
+    throw err;
+  }
+}
+
+async function saveDocument(event: APIGatewayProxyEventV2WithJWTAuthorizer, projectId: string, callerId: string): Promise<APIGatewayProxyResultV2> {
+  const membership = await getMembership(projectId, callerId);
+  if (!membership) return respond(403, { error: 'not a member of this project' });
+
+  const body = parseBody(event);
+  if (typeof body.snapshot !== 'string') return respond(400, { error: 'snapshot (base64) is required' });
+
+  await s3.send(new PutObjectCommand({ Bucket: DOCUMENTS_BUCKET, Key: documentKey(projectId), Body: Buffer.from(body.snapshot, 'base64') }));
+  await ddb.send(
+    new UpdateCommand({
+      TableName: PROJECTS_TABLE,
+      Key: { projectId },
+      UpdateExpression: 'SET updatedAt = :now',
+      ExpressionAttributeValues: { ':now': new Date().toISOString() },
+    }),
+  );
+  return respond(200, { ok: true });
+}
+
+export const handler: APIGatewayProxyHandlerV2WithJWTAuthorizer = async (event) => {
+  const callerId = getCallerId(event);
+  const method = event.requestContext.http.method;
+  const segments = event.rawPath.split('/').filter(Boolean);
+
+  try {
+    if (segments[0] !== 'projects') return respond(404, { error: 'not found' });
+
+    if (segments.length === 1) {
+      if (method === 'POST') return await createProject(event, callerId);
+      if (method === 'GET') return await listProjects(callerId);
+    }
+
+    if (segments.length === 2) {
+      const [, projectId] = segments;
+      if (method === 'GET') return await getProject(projectId, callerId);
+      if (method === 'PATCH') return await renameProject(event, projectId, callerId);
+      if (method === 'DELETE') return await deleteProject(projectId, callerId);
+    }
+
+    if (segments.length === 3) {
+      const [, projectId, action] = segments;
+      if (action === 'share' && method === 'POST') return await shareProject(event, projectId, callerId);
+      if (action === 'document' && method === 'GET') return await loadDocument(projectId, callerId);
+      if (action === 'document' && method === 'PUT') return await saveDocument(event, projectId, callerId);
+    }
+
+    return respond(404, { error: 'not found' });
+  } catch (err) {
+    console.error(err);
+    return respond(500, { error: 'internal error' });
+  }
 };

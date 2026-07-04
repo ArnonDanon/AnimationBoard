@@ -5,9 +5,30 @@
 }
 
 .editor-body {
+  position: relative;
   display: flex;
   align-items: flex-start;
   gap: 0.75rem;
+}
+
+.editor-loading-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255, 255, 255, 0.85);
+  z-index: 1;
+}
+
+.project-title {
+  font-weight: 600;
+}
+
+.save-status {
+  font-size: 0.8rem;
+  color: #777;
+  min-width: 4.5rem;
 }
 
 .editor-toolbar {

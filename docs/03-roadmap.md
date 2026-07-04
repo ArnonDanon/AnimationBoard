@@ -348,13 +348,62 @@ resetting to black/transparent.
 
 Goal: FR-PROJ-1..6, NFR-DATA-1..2.
 
-- [ ] DynamoDB: Project + ProjectMembership tables/access patterns (ADR-004)
-- [ ] HTTP API + Lambda: create / list / rename / delete project
-- [ ] HTTP API + Lambda: save Document snapshot to S3, load snapshot → hydrate `Y.Doc`
-- [ ] Autosave/debounced save while editing (bounds data-loss window per NFR-DATA-1)
-- [ ] Project list UI (own projects, shared projects)
-- [ ] Sharing: invite 1–2 collaborators (link or email), enforced 3-member cap
-      (per Project aggregate invariant in `docs/01-domain-model.md`)
+- [x] DynamoDB: Project + ProjectMembership tables/access patterns (ADR-004) —
+      already provisioned in Epic 1 (`ProjectsTable` keyed by `projectId`,
+      `ProjectMembersTable` keyed by `projectId`+`animatorId` with a
+      `byAnimator` GSI for "list my projects"); this epic wired real access
+      patterns against them for the first time
+- [x] HTTP API + Lambda: create / list / rename / delete project — single
+      Lambda (`infra/lambda/http/handler.ts`) manually routed by method+path
+      behind the existing Cognito JWT authorizer. `createProject` seeds an
+      empty document immediately (reusing `@animationboard/drawing-engine`'s
+      own `createDocument`/`exportSnapshot` server-side, so the shape of "an
+      empty document" has one source of truth, not a duplicated Lambda-side
+      guess). `deleteProject` requires the owner role and cascades to the
+      membership rows
+- [x] HTTP API + Lambda: save Document snapshot to S3, load snapshot →
+      hydrate `Y.Doc` — snapshot travels as base64 inside JSON (simpler than
+      configuring binary media types on the HTTP API); the client decodes it
+      and hydrates via `createDocumentFromSnapshot`
+- [x] Autosave/debounced save while editing (bounds data-loss window per
+      NFR-DATA-1) — `Editor.tsx` debounces 2.5s after the last `Y.Doc`
+      change, with a "Saving…/Saved" indicator, and does a best-effort final
+      save on unmount (navigating back to the dashboard) so a save already
+      in flight isn't lost to React cleanup
+- [x] Project list UI (own projects, shared projects) — `ProjectDashboard.tsx`,
+      one flat list with a role badge (owner/collaborator) rather than two
+      separate sections, since a POC user only has a handful of projects
+- [x] Sharing: invite 1–2 collaborators (link or email), enforced 3-member cap
+      (per Project aggregate invariant in `docs/01-domain-model.md`) — invite
+      by email only (no shareable link for the POC); resolves the email to a
+      Cognito user id via `cognito-idp:ListUsers` (scoped IAM permission,
+      read-only), so it only works for people who already have an
+      AnimationBoard account, matching the domain model's assumption
+
+**CORS gotcha caught during verification** (not a logic bug — an API Gateway
+routing subtlety): the HTTP API's single route used `HttpMethod.ANY`, which
+includes `OPTIONS`. That routed CORS preflight requests through the same
+JWT authorizer as everything else, and browsers never attach an
+`Authorization` header to a preflight request — so every real request's
+preflight got rejected and CORS broke entirely, before the authorizer even
+had a chance to matter for the actual request. Fixed by routing only the
+methods actually used (`GET/POST/PATCH/DELETE/PUT`) through the Lambda,
+leaving `OPTIONS` to the API's own built-in CORS handling. Also scoped
+`corsPreflight.allowOrigins` to the known dev and Amplify origins rather
+than a wildcard, per explicit preference over the simpler wildcard option.
+
+Verified end-to-end against the real deployed API (not mocked): created a
+project, drew a stroke, watched the save indicator go
+Saving→Saved, did a **full hard page reload** and confirmed the stroke was
+still there (real persistence, not just in-memory state), renamed the
+project, shared it with a second real Cognito test user, confirmed that
+user sees it in their own dashboard with a "collaborator" badge and without
+Share/Delete buttons (owner-only, enforced in the UI — the backend enforces
+it independently too), confirmed they see the owner's actual drawn content
+after opening it, and confirmed the owner deleting it removes it from the
+list. Also smoke-tested the 3-member cap and non-owner delete/share
+rejection directly against the API with curl before touching the UI at
+all. Zero console errors throughout.
 
 ## Epic 10 — Realtime Multi-User Sync
 

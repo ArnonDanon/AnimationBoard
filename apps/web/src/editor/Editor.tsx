@@ -1,38 +1,110 @@
 import { useEffect, useRef, useState } from 'react'
-import { BUILT_IN_BRUSHES, BUILT_IN_PALETTE, createEngine } from '@animationboard/drawing-engine'
+import { BUILT_IN_BRUSHES, BUILT_IN_PALETTE, createDocumentFromSnapshot, createEngine } from '@animationboard/drawing-engine'
 import type { DrawingEngine } from '@animationboard/drawing-engine'
+import { getProject, loadDocument, saveDocument } from '../api/client'
 import { LayerPanel } from './LayerPanel'
 import { Timeline } from './Timeline'
 import './Editor.css'
 
+// Debounce autosave rather than saving on every stroke point — bounds the data-loss
+// window (NFR-DATA-1) without hammering the API while the user is actively drawing.
+const AUTOSAVE_DEBOUNCE_MS = 2500
+
 interface EditorProps {
   animatorId: string
+  projectId: string
+  onBack: () => void
 }
 
-export function Editor({ animatorId }: EditorProps) {
+type LoadState = 'loading' | 'ready' | 'error'
+type SaveStatus = 'idle' | 'saving' | 'saved' | 'error'
+
+export function Editor({ animatorId, projectId, onBack }: EditorProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const engineRef = useRef<DrawingEngine | null>(null)
   const [, tick] = useState(0)
+  const [loadState, setLoadState] = useState<LoadState>('loading')
+  const [projectName, setProjectName] = useState('')
+  const [saveStatus, setSaveStatus] = useState<SaveStatus>('idle')
 
   useEffect(() => {
-    if (!canvasRef.current) return
-    const engine = createEngine({ canvas: canvasRef.current, animatorId })
-    engineRef.current = engine
-    const unsubscribe = engine.onChange(() => tick((n) => n + 1))
-    tick((n) => n + 1) // re-render now that engineRef is populated (ref writes don't trigger one)
-    return () => {
-      unsubscribe()
-      engine.destroy()
-      engineRef.current = null
+    let cancelled = false
+    let debounceHandle: ReturnType<typeof setTimeout> | null = null
+    let pendingBytes: Uint8Array | null = null
+    let unsubscribeTick: (() => void) | null = null
+    let unsubscribeAutosave: (() => void) | null = null
+
+    setLoadState('loading')
+    setSaveStatus('idle')
+
+    function flush() {
+      if (!pendingBytes) return
+      const bytes = pendingBytes
+      pendingBytes = null
+      setSaveStatus('saving')
+      saveDocument(projectId, bytes)
+        .then(() => !cancelled && setSaveStatus('saved'))
+        .catch(() => !cancelled && setSaveStatus('error'))
     }
-  }, [animatorId])
+
+    async function init() {
+      const [snapshot, detail] = await Promise.all([loadDocument(projectId), getProject(projectId)])
+      if (cancelled || !canvasRef.current) return
+
+      const doc = createDocumentFromSnapshot(snapshot)
+      const engine = createEngine({ canvas: canvasRef.current, animatorId, doc })
+      engineRef.current = engine
+      setProjectName(detail.name)
+
+      unsubscribeTick = engine.onChange(() => tick((n) => n + 1))
+      unsubscribeAutosave = engine.onChange(() => {
+        pendingBytes = engine.exportSnapshot()
+        if (debounceHandle) clearTimeout(debounceHandle)
+        debounceHandle = setTimeout(flush, AUTOSAVE_DEBOUNCE_MS)
+      })
+
+      setLoadState('ready')
+      tick((n) => n + 1)
+    }
+
+    init().catch(() => !cancelled && setLoadState('error'))
+
+    return () => {
+      cancelled = true
+      if (debounceHandle) clearTimeout(debounceHandle)
+      flush() // best-effort final save when navigating away or switching projects
+      unsubscribeTick?.()
+      unsubscribeAutosave?.()
+      if (engineRef.current) {
+        engineRef.current.destroy()
+        engineRef.current = null
+      }
+    }
+  }, [projectId, animatorId])
 
   const engine = engineRef.current
   const activeTool = engine?.getActiveTool() ?? 'brush'
 
+  if (loadState === 'error') {
+    return (
+      <div className="editor">
+        <p className="dashboard-error">Failed to load this project.</p>
+        <button onClick={onBack}>← Back to projects</button>
+      </div>
+    )
+  }
+
   return (
     <div className="editor">
       <div className="editor-toolbar">
+        <button onClick={onBack}>← Back to projects</button>
+        <span className="project-title">{projectName}</span>
+        <span className="save-status">
+          {saveStatus === 'saving' && 'Saving…'}
+          {saveStatus === 'saved' && 'Saved'}
+          {saveStatus === 'error' && 'Save failed'}
+        </span>
+        <span className="divider" />
         <button onClick={() => engine?.undo()}>Undo</button>
         <button onClick={() => engine?.redo()}>Redo</button>
         <span className="divider" />
@@ -134,6 +206,7 @@ export function Editor({ animatorId }: EditorProps) {
       </div>
 
       <div className="editor-body">
+        {loadState === 'loading' && <div className="editor-loading-overlay">Loading project…</div>}
         <canvas
           ref={canvasRef}
           width={900}
