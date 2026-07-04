@@ -33,6 +33,7 @@ import { exportSnapshot as encodeSnapshot } from './serialize';
 import { rotateObject, scaleObject, translateObject } from './transform';
 import { DEFAULT_BRUSH, resolveStrokeStyle } from './brush';
 import { BUILT_IN_PALETTE } from './palette';
+import { rgbToHex } from './color';
 import { eraseFromLayer } from './eraser';
 import { DEFAULT_TRANSFORM } from './types';
 import type { Brush, FrameData, LayerData, Point, Tool } from './types';
@@ -104,6 +105,11 @@ export class DrawingEngine {
   }
 
   private handlePointerStart(p: Point): void {
+    if (this.activeTool === 'colorPicker') {
+      this.sampleColorAt(p);
+      return;
+    }
+
     if (this.activeTool === 'eraser') {
       this.lastErasePoint = p;
       this.eraseAt([p]);
@@ -172,6 +178,16 @@ export class DrawingEngine {
     const layer = this.activeLayer;
     if (!layer || !isLayerEditable(layer)) return;
     eraseFromLayer(layer, path, this.eraserRadius);
+  }
+
+  // Reads the already-rendered canvas pixel directly rather than hit-testing objects —
+  // this automatically respects layer visibility, stacking order, and opacity blending
+  // for free, since the canvas is already the fully composited result.
+  private sampleColorAt(p: Point): void {
+    const pixel = this.ctx.getImageData(Math.round(p.x), Math.round(p.y), 1, 1).data;
+    if (pixel[3] === 0) return; // nothing drawn here — leave the active color as-is
+    this.setActiveColor(rgbToHex(pixel[0], pixel[1], pixel[2]));
+    this.setActiveTool('brush'); // pick, then continue drawing immediately
   }
 
   private handleHover(p: Point): void {

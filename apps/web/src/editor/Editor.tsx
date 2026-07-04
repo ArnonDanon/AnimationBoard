@@ -61,6 +61,13 @@ export function Editor({ animatorId }: EditorProps) {
         >
           Eraser
         </button>
+        <button
+          className={activeTool === 'colorPicker' ? 'brush-button active' : 'brush-button'}
+          title="Sample a color from the canvas"
+          onClick={() => engine?.setActiveTool('colorPicker')}
+        >
+          🎨 Pick
+        </button>
         {activeTool === 'eraser' && (
           <label className="slider-control">
             Size
@@ -118,6 +125,12 @@ export function Editor({ animatorId }: EditorProps) {
             onClick={() => engine?.setActiveColor(color)}
           />
         ))}
+        <span className="divider" />
+        <span
+          className="swatch current-color"
+          title={`Current color: ${engine?.getActiveColor() ?? ''}`}
+          style={{ backgroundColor: engine?.getActiveColor() }}
+        />
       </div>
 
       <div className="editor-body">

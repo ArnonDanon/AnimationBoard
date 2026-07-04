@@ -324,8 +324,25 @@ bounding box immediately before every simulated draw.
 
 Goal: FR-COLOR-1..2.
 
-- [ ] `ColorSampler`: sample color at a point across visible layers in current frame
-- [ ] Eyedropper tool UI; sampled color becomes active brush color
+- [x] `ColorSampler`: sample color at a point across visible layers in current
+      frame — implemented as `engine.ts`'s `sampleColorAt`, reading the
+      already-rendered canvas pixel directly via `getImageData` rather than
+      hit-testing objects. This gets layer visibility, stacking order, and
+      opacity blending for free, since the canvas is already the fully
+      composited result — no separate geometry logic needed. `rgbToHex` in
+      `color.ts`, 3 unit tests
+- [x] Eyedropper tool UI; sampled color becomes active brush color — a
+      "🎨 Pick" tool button; clicking the canvas samples and immediately
+      switches back to Brush so the user can keep drawing. Clicking blank
+      canvas (alpha=0) leaves the active color unchanged and stays in picker
+      mode rather than silently "picking" nothing
+
+Verified live: picked an exact color from a drawn stroke (measured
+pixel-precise, not just "looks right"), confirmed the palette and a new
+current-color indicator swatch both reflect it, drew a new stroke and
+confirmed it used the picked color, picked a second color from a different
+stroke, and confirmed clicking empty canvas does nothing rather than
+resetting to black/transparent.
 
 ## Epic 9 — Persistence (Save/Load)
 

@@ -45,6 +45,12 @@
   outline-offset: 2px;
 }
 
+.swatch.current-color {
+  cursor: default;
+  border: 2px solid #333;
+  display: inline-block;
+}
+
 .slider-control {
   display: flex;
   align-items: center;
