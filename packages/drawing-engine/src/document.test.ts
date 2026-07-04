@@ -4,16 +4,22 @@ import {
   addLayer,
   createDocument,
   createVectorObject,
+  deleteFrame,
   deleteLayer,
+  duplicateFrame,
   duplicateLayer,
   frameToData,
+  getFps,
   getFramesArray,
   getLayersArray,
   getObjectsArray,
   isLayerEditable,
   layerToData,
+  moveFrame,
   moveLayer,
+  renameFrame,
   renameLayer,
+  setFps,
   setLayerLocked,
   setLayerVisible,
   vectorObjectToData,
@@ -154,6 +160,93 @@ describe('layer management', () => {
     addLayer(frame, 'Layer 2');
     const newIndex = moveLayer(frame, 0, 999);
     expect(newIndex).toBe(1);
+  });
+});
+
+describe('fps', () => {
+  it('defaults to 12 and can be changed', () => {
+    const doc = createDocument();
+    expect(getFps(doc)).toBe(12);
+    setFps(doc, 24);
+    expect(getFps(doc)).toBe(24);
+  });
+
+  it('rounds and floors fps at 1', () => {
+    const doc = createDocument();
+    setFps(doc, 23.6);
+    expect(getFps(doc)).toBe(24);
+    setFps(doc, -5);
+    expect(getFps(doc)).toBe(1);
+  });
+});
+
+describe('frame management', () => {
+  it('renames a frame', () => {
+    const doc = createDocument();
+    const frame = getFramesArray(doc).get(0);
+    renameFrame(frame, 'Intro');
+    expect(frameToData(frame).name).toBe('Intro');
+  });
+
+  it('refuses to delete the timeline\'s last remaining frame', () => {
+    const doc = createDocument();
+    const deleted = deleteFrame(doc, 0);
+    expect(deleted).toBe(false);
+    expect(getFramesArray(doc).length).toBe(1);
+  });
+
+  it('deletes a frame when another one remains', () => {
+    const doc = createDocument();
+    addFrame(doc, 'Frame 2');
+    const deleted = deleteFrame(doc, 0);
+    expect(deleted).toBe(true);
+    const frames = getFramesArray(doc);
+    expect(frames.length).toBe(1);
+    expect(frameToData(frames.get(0)).name).toBe('Frame 2');
+  });
+
+  it('duplicates a frame with independent copies of its layers and objects', () => {
+    const doc = createDocument();
+    const frames = getFramesArray(doc);
+    const original = frames.get(0);
+    const originalLayer = getLayersArray(original).get(0);
+    getObjectsArray(originalLayer).push([
+      createVectorObject({
+        kind: 'stroke',
+        points: [{ x: 0, y: 0, pressure: 1 }],
+        style: { color: '#000', width: 2, opacity: 1 },
+        transform: { ...DEFAULT_TRANSFORM },
+        createdBy: 'a',
+      }),
+    ]);
+
+    duplicateFrame(doc, 0);
+
+    expect(frames.length).toBe(2);
+    expect(frameToData(frames.get(1)).name).toBe('Frame 1 copy');
+    const copiedLayer = getLayersArray(frames.get(1)).get(0);
+    expect(getObjectsArray(copiedLayer).length).toBe(1);
+
+    // Independent copy: mutating the original's content doesn't affect the duplicate.
+    getObjectsArray(originalLayer).delete(0, 1);
+    expect(getObjectsArray(originalLayer).length).toBe(0);
+    expect(getObjectsArray(copiedLayer).length).toBe(1);
+  });
+
+  it('moves a frame to a new position, preserving its id and content', () => {
+    const doc = createDocument();
+    addFrame(doc, 'Frame 2');
+    addFrame(doc, 'Frame 3');
+    const frames = getFramesArray(doc);
+    const originalFirstId = frameToData(frames.get(0)).id;
+
+    const newIndex = moveFrame(doc, 0, 2);
+
+    expect(newIndex).toBe(2);
+    const moved = frameToData(getFramesArray(doc).get(2));
+    expect(moved.id).toBe(originalFirstId);
+    expect(moved.name).toBe('Frame 1');
+    expect(getFramesArray(doc).length).toBe(3);
   });
 });
 

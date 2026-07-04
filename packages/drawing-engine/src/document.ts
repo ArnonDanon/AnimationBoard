@@ -31,6 +31,10 @@ export function getFps(doc: Y.Doc): number {
   return (doc.getMap('meta').get('fps') as number) ?? DEFAULT_FPS;
 }
 
+export function setFps(doc: Y.Doc, fps: number): void {
+  doc.getMap('meta').set('fps', Math.max(1, Math.round(fps)));
+}
+
 export function createFrame(name: string): YFrame {
   const frame: YFrame = new Y.Map();
   frame.set('id', generateId());
@@ -149,6 +153,52 @@ export function moveLayer(frame: YFrame, fromIndex: number, toIndex: number): nu
   const clone = cloneLayer(layers.get(fromIndex), { preserveIds: true });
   layers.delete(fromIndex, 1);
   layers.insert(clampedTo, [clone]);
+  return clampedTo;
+}
+
+function cloneFrame(frame: YFrame, options: { preserveIds: boolean; nameOverride?: string }): YFrame {
+  const data = frameToData(frame);
+  const clone: YFrame = new Y.Map();
+  clone.set('id', options.preserveIds ? data.id : generateId());
+  clone.set('name', options.nameOverride ?? data.name);
+  const clonedLayers = getLayersArray(frame)
+    .toArray()
+    .map((layer) => cloneLayer(layer, { preserveIds: options.preserveIds }));
+  const layers = new Y.Array<YLayer>();
+  layers.push(clonedLayers);
+  clone.set('layers', layers);
+  return clone;
+}
+
+/** Refuses to delete the timeline's last remaining frame; returns whether it deleted. */
+export function deleteFrame(doc: Y.Doc, index: number): boolean {
+  const frames = getFramesArray(doc);
+  if (frames.length <= 1) return false;
+  frames.delete(index, 1);
+  return true;
+}
+
+export function duplicateFrame(doc: Y.Doc, index: number): YFrame {
+  const frames = getFramesArray(doc);
+  const source = frames.get(index);
+  const copy = cloneFrame(source, { preserveIds: false, nameOverride: `${frameToData(source).name} copy` });
+  frames.insert(index + 1, [copy]);
+  return copy;
+}
+
+export function renameFrame(frame: YFrame, name: string): void {
+  frame.set('name', name);
+}
+
+/** Same clone+delete+reinsert pattern as `moveLayer`, one level up. */
+export function moveFrame(doc: Y.Doc, fromIndex: number, toIndex: number): number {
+  const frames = getFramesArray(doc);
+  const clampedTo = Math.max(0, Math.min(toIndex, frames.length - 1));
+  if (fromIndex < 0 || fromIndex >= frames.length || fromIndex === clampedTo) return fromIndex;
+
+  const clone = cloneFrame(frames.get(fromIndex), { preserveIds: true });
+  frames.delete(fromIndex, 1);
+  frames.insert(clampedTo, [clone]);
   return clampedTo;
 }
 

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { BUILT_IN_BRUSHES, BUILT_IN_PALETTE, createEngine } from '@animationboard/drawing-engine'
 import type { DrawingEngine } from '@animationboard/drawing-engine'
 import { LayerPanel } from './LayerPanel'
+import { Timeline } from './Timeline'
 import './Editor.css'
 
 interface EditorProps {
@@ -34,13 +35,6 @@ export function Editor({ animatorId }: EditorProps) {
       <div className="editor-toolbar">
         <button onClick={() => engine?.undo()}>Undo</button>
         <button onClick={() => engine?.redo()}>Redo</button>
-        <span className="divider" />
-        <button onClick={() => engine?.setActiveFrameIndex((engine.getActiveFrameIndex() ?? 0) - 1)}>◀</button>
-        <span className="frame-indicator">
-          Frame {(engine?.getActiveFrameIndex() ?? 0) + 1} / {engine?.getFrameCount() ?? 1}
-        </span>
-        <button onClick={() => engine?.setActiveFrameIndex((engine.getActiveFrameIndex() ?? 0) + 1)}>▶</button>
-        <button onClick={() => engine?.addFrame()}>Add Frame</button>
         <span className="divider" />
         <button disabled={!engine?.hasSelection()} onClick={() => engine?.scaleSelection(1.1)}>Scale +</button>
         <button disabled={!engine?.hasSelection()} onClick={() => engine?.scaleSelection(0.9)}>Scale -</button>
@@ -113,6 +107,8 @@ export function Editor({ animatorId }: EditorProps) {
         />
         <LayerPanel engine={engine} />
       </div>
+
+      <Timeline engine={engine} />
     </div>
   )
 }

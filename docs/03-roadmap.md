@@ -270,10 +270,35 @@ throughout.
 
 Goal: FR-TIME-1..4.
 
-- [ ] Timeline as ordered Frame list, fixed/configurable FPS
-- [ ] Add / delete / duplicate / rename / reorder frame
-- [ ] Playback: render frames in sequence at target FPS, start/stop
-- [ ] Timeline UI (frame strip)
+- [x] Timeline as ordered Frame list, fixed/configurable FPS — already an
+      ordered `Y.Array` since Epic 3; `setFps`/`getFps` added to
+      `document.ts` (default 12, rounds and floors at 1)
+- [x] Add / delete / duplicate / rename / reorder frame — `document.ts`,
+      mirroring Epic 6's layer functions exactly (`deleteFrame` refuses to
+      remove the timeline's last frame, `duplicateFrame` deep-copies every
+      layer and object with fresh ids, `moveFrame` uses the same
+      clone+delete+reinsert pattern). 8 new unit tests
+- [x] Playback: render frames in sequence at target FPS, start/stop —
+      `play()`/`pause()`/`getIsPlaying()` in `engine.ts`, `setInterval`-driven;
+      stops automatically at the last frame rather than looping (looping is
+      an Epic 11 stretch goal, per `docs/00-requirements.md`). Manual frame
+      navigation while playing stops playback first, so it can't fight the
+      timer
+- [x] Timeline UI (frame strip) — `Timeline.tsx` replaces the old ◀ Frame
+      X/Y ▶ indicator: play/pause, FPS input, and a scrollable strip of
+      frame cards (click to activate, inline rename, move earlier/later,
+      duplicate, delete)
+
+Verified live: drew a distinct mark on each of 3 frames, confirmed each
+plays back in sequence at a deliberately slow, measurable FPS (2fps) and
+that playback stops exactly at the last frame without looping or continuing
+to advance afterward. Also verified add/rename/duplicate/reorder/delete
+end-to-end, including the delete guard at one remaining frame. One
+verification-script bug caught along the way (not an app bug): Playwright
+auto-scrolls the page to click elements below the fold, and the Timeline
+sits below a tall canvas — a stale cached canvas bounding box from before
+that scroll made a later draw land ~220px off. Fixed by re-fetching the
+bounding box immediately before every simulated draw.
 
 ## Epic 8 — Color Picker
 

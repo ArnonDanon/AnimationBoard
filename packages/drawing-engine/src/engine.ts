@@ -4,15 +4,22 @@ import {
   addLayer as addLayerToDoc,
   createDocument,
   createVectorObject,
+  deleteFrame as deleteFrameFromDoc,
   deleteLayer as deleteLayerFromDoc,
+  duplicateFrame as duplicateFrameInDoc,
   duplicateLayer as duplicateLayerInDoc,
+  frameToData,
+  getFps as getFpsFromDoc,
   getFramesArray,
   getLayersArray,
   getObjectsArray,
   isLayerEditable,
   layerToData,
+  moveFrame as moveFrameInDoc,
   moveLayer as moveLayerInDoc,
+  renameFrame as renameFrameInDoc,
   renameLayer as renameLayerInDoc,
+  setFps as setFpsInDoc,
   setLayerLocked as setLayerLockedInDoc,
   setLayerVisible as setLayerVisibleInDoc,
   vectorObjectToData,
@@ -28,7 +35,7 @@ import { DEFAULT_BRUSH, resolveStrokeStyle } from './brush';
 import { BUILT_IN_PALETTE } from './palette';
 import { eraseFromLayer } from './eraser';
 import { DEFAULT_TRANSFORM } from './types';
-import type { Brush, LayerData, Point, Tool } from './types';
+import type { Brush, FrameData, LayerData, Point, Tool } from './types';
 
 export interface EngineOptions {
   canvas: HTMLCanvasElement;
@@ -58,6 +65,7 @@ export class DrawingEngine {
   private eraserRadius = DEFAULT_ERASER_RADIUS;
   private lastErasePoint: Point | null = null;
   private hoverPoint: Point | null = null;
+  private playbackTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(options: EngineOptions) {
     this.doc = options.doc ?? createDocument();
@@ -237,10 +245,15 @@ export class DrawingEngine {
     return this.activeFrameIndex;
   }
 
-  setActiveFrameIndex(index: number): void {
+  private setFrameIndexRaw(index: number): void {
     const count = this.getFrameCount();
     this.activeFrameIndex = Math.max(0, Math.min(index, count - 1));
     this.selectedObjectId = null;
+  }
+
+  setActiveFrameIndex(index: number): void {
+    this.pause(); // manual navigation while playing would fight with the playback timer
+    this.setFrameIndexRaw(index);
     this.notify();
   }
 
@@ -288,6 +301,85 @@ export class DrawingEngine {
   addFrame(name?: string): void {
     addFrameToDoc(this.doc, name);
     this.setActiveFrameIndex(this.getFrameCount() - 1);
+  }
+
+  getFrames(): FrameData[] {
+    const frames = getFramesArray(this.doc);
+    const result: FrameData[] = [];
+    for (let i = 0; i < frames.length; i++) result.push(frameToData(frames.get(i)));
+    return result;
+  }
+
+  getFps(): number {
+    return getFpsFromDoc(this.doc);
+  }
+
+  setFps(fps: number): void {
+    setFpsInDoc(this.doc, fps);
+    if (this.getIsPlaying()) {
+      // Restart the timer at the new interval rather than waiting for the old one to fire.
+      this.pause();
+      this.play();
+    }
+  }
+
+  deleteFrame(index: number): void {
+    const removed = deleteFrameFromDoc(this.doc, index);
+    if (!removed) return; // refused: it was the timeline's last frame
+    this.pause();
+    this.setFrameIndexRaw(Math.min(this.activeFrameIndex, this.getFrameCount() - 1));
+    this.notify();
+  }
+
+  duplicateFrame(index: number): void {
+    duplicateFrameInDoc(this.doc, index);
+    this.setActiveFrameIndex(index + 1); // the new copy, inserted directly after, becomes active
+  }
+
+  renameFrame(index: number, name: string): void {
+    const frames = getFramesArray(this.doc);
+    renameFrameInDoc(frames.get(index), name);
+  }
+
+  moveFrameEarlier(index: number): void {
+    this.pause();
+    const newIndex = moveFrameInDoc(this.doc, index, index - 1);
+    if (this.activeFrameIndex === index) this.activeFrameIndex = newIndex;
+    this.notify();
+  }
+
+  moveFrameLater(index: number): void {
+    this.pause();
+    const newIndex = moveFrameInDoc(this.doc, index, index + 1);
+    if (this.activeFrameIndex === index) this.activeFrameIndex = newIndex;
+    this.notify();
+  }
+
+  getIsPlaying(): boolean {
+    return this.playbackTimer !== null;
+  }
+
+  play(): void {
+    if (this.playbackTimer || this.getFrameCount() <= 1) return;
+    if (this.activeFrameIndex >= this.getFrameCount() - 1) this.setFrameIndexRaw(0);
+    const intervalMs = 1000 / this.getFps();
+    this.playbackTimer = setInterval(() => {
+      const next = this.activeFrameIndex + 1;
+      if (next >= this.getFrameCount()) {
+        this.pause();
+        return;
+      }
+      this.setFrameIndexRaw(next);
+      this.notify();
+    }, intervalMs);
+    this.notify();
+  }
+
+  pause(): void {
+    if (!this.playbackTimer) return;
+    clearInterval(this.playbackTimer);
+    this.playbackTimer = null;
+    this.notify();
   }
 
   getLayers(): LayerData[] {
@@ -383,6 +475,7 @@ export class DrawingEngine {
   }
 
   destroy(): void {
+    if (this.playbackTimer) clearInterval(this.playbackTimer);
     this.detachInput();
     this.listeners.clear();
   }
