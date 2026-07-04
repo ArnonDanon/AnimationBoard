@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
-import { createProject, deleteProject, listProjects, renameProject, shareProject } from '../api/client'
-import type { ProjectSummary } from '../api/client'
+import { createProject, deleteProject, getProject, listProjects, renameProject, revokeMember, shareProject } from '../api/client'
+import type { ProjectMember, ProjectSummary } from '../api/client'
 import './ProjectDashboard.css'
 
 interface ProjectDashboardProps {
@@ -12,6 +12,9 @@ export function ProjectDashboard({ onOpenProject }: ProjectDashboardProps) {
   const [error, setError] = useState<string | null>(null)
   const [newName, setNewName] = useState('')
   const [creating, setCreating] = useState(false)
+  const [expandedProjectId, setExpandedProjectId] = useState<string | null>(null)
+  const [members, setMembers] = useState<ProjectMember[] | null>(null)
+  const [membersError, setMembersError] = useState<string | null>(null)
 
   function refresh() {
     listProjects()
@@ -67,6 +70,34 @@ export function ProjectDashboard({ onOpenProject }: ProjectDashboardProps) {
     }
   }
 
+  async function toggleMembers(project: ProjectSummary) {
+    if (expandedProjectId === project.projectId) {
+      setExpandedProjectId(null)
+      return
+    }
+    setExpandedProjectId(project.projectId)
+    setMembers(null)
+    setMembersError(null)
+    try {
+      const detail = await getProject(project.projectId)
+      setMembers(detail.members)
+    } catch (e) {
+      setMembersError((e as Error).message)
+    }
+  }
+
+  async function handleRevoke(project: ProjectSummary, member: ProjectMember) {
+    const label = member.email ?? member.animatorId
+    if (!window.confirm(`Revoke ${label}'s access to "${project.name}"?`)) return
+    try {
+      await revokeMember(project.projectId, member.animatorId)
+      const detail = await getProject(project.projectId)
+      setMembers(detail.members)
+    } catch (e) {
+      setMembersError((e as Error).message)
+    }
+  }
+
   return (
     <div className="project-dashboard">
       <div className="new-project">
@@ -92,16 +123,37 @@ export function ProjectDashboard({ onOpenProject }: ProjectDashboardProps) {
         <ul className="project-list">
           {projects.map((project) => (
             <li key={project.projectId} className="project-row">
-              <button className="project-open" onClick={() => onOpenProject(project.projectId)}>
-                <span className="project-name">{project.name}</span>
-                <span className="project-role">{project.role}</span>
-              </button>
-              <span className="project-updated">Updated {new Date(project.updatedAt).toLocaleString()}</span>
-              <div className="project-actions">
-                <button onClick={() => handleRename(project)}>Rename</button>
-                {project.role === 'owner' && <button onClick={() => handleShare(project)}>Share</button>}
-                {project.role === 'owner' && <button onClick={() => handleDelete(project)}>Delete</button>}
+              <div className="project-row-main">
+                <button className="project-open" onClick={() => onOpenProject(project.projectId)}>
+                  <span className="project-name">{project.name}</span>
+                  <span className="project-role">{project.role}</span>
+                </button>
+                <span className="project-updated">Updated {new Date(project.updatedAt).toLocaleString()}</span>
+                <div className="project-actions">
+                  <button onClick={() => toggleMembers(project)}>
+                    {expandedProjectId === project.projectId ? 'Hide members' : 'Members'}
+                  </button>
+                  <button onClick={() => handleRename(project)}>Rename</button>
+                  {project.role === 'owner' && <button onClick={() => handleShare(project)}>Share</button>}
+                  {project.role === 'owner' && <button onClick={() => handleDelete(project)}>Delete</button>}
+                </div>
               </div>
+
+              {expandedProjectId === project.projectId && (
+                <div className="project-members">
+                  {membersError && <p className="dashboard-error">{membersError}</p>}
+                  {members === null && !membersError && <p>Loading members…</p>}
+                  {members?.map((member) => (
+                    <div key={member.animatorId} className="project-member">
+                      <span className="project-member-email">{member.email ?? member.animatorId}</span>
+                      <span className="project-member-role">{member.role}</span>
+                      {project.role === 'owner' && member.role === 'collaborator' && (
+                        <button onClick={() => handleRevoke(project, member)}>Revoke</button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
             </li>
           ))}
         </ul>

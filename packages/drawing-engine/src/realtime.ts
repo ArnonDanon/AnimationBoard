@@ -21,6 +21,13 @@ const MAX_RECONNECT_DELAY_MS = 15000;
 export interface RealtimeProviderOptions {
   doc: Y.Doc;
   url: string;
+  /**
+   * Called when the server reports this connection's access was revoked (an owner
+   * removed this animator from the project). The provider stops reconnecting after
+   * this fires — reconnecting would just fail the $connect authorizer's now-missing
+   * membership check anyway.
+   */
+  onRevoked?: () => void;
 }
 
 /**
@@ -38,6 +45,7 @@ export interface RealtimeProviderOptions {
 export class RealtimeProvider {
   private readonly doc: Y.Doc;
   private readonly url: string;
+  private readonly onRevoked?: () => void;
   private ws: WebSocket | null = null;
   private closed = false;
   private reconnectDelay = INITIAL_RECONNECT_DELAY_MS;
@@ -50,6 +58,7 @@ export class RealtimeProvider {
   constructor(options: RealtimeProviderOptions) {
     this.doc = options.doc;
     this.url = options.url;
+    this.onRevoked = options.onRevoked;
     this.doc.on('update', this.handleLocalUpdate);
     this.connect();
   }
@@ -74,8 +83,13 @@ export class RealtimeProvider {
     };
     ws.onmessage = (event) => {
       try {
-        const message = JSON.parse(event.data as string) as { type: string; update: string };
-        if (message.type === 'update') Y.applyUpdate(this.doc, base64ToBytes(message.update), this);
+        const message = JSON.parse(event.data as string) as { type: string; update?: string };
+        if (message.type === 'update' && message.update) {
+          Y.applyUpdate(this.doc, base64ToBytes(message.update), this);
+        } else if (message.type === 'revoked') {
+          this.onRevoked?.();
+          this.destroy();
+        }
       } catch (err) {
         console.error('realtime: failed to apply remote update', err);
       }

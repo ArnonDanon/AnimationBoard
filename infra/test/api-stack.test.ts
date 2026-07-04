@@ -91,4 +91,30 @@ describe('ApiStack', () => {
       ['WsAuthorizerHandler3D9D66A5', 'WsConnectHandler224A8AE8', 'WsDefaultHandlerA9589733', 'WsDisconnectHandler2953FE4B'].sort(),
     );
   });
+
+  test('the HTTP handler (specifically) can kick a revoked member\'s live WebSocket connection', () => {
+    // Scoped to HttpStubHandler's own policy, not just "some" IAM::Policy in the
+    // template — WsDefaultHandler also has ManageConnections, for the relay path.
+    const policies = template.findResources('AWS::IAM::Policy', {
+      Properties: { Roles: Match.arrayWith([Match.objectLike({ Ref: Match.stringLikeRegexp('^HttpStubHandlerServiceRole') })]) },
+    });
+    const statements = Object.values(policies).flatMap((p) => p.Properties.PolicyDocument.Statement);
+    expect(statements).toEqual(
+      expect.arrayContaining([expect.objectContaining({ Action: 'execute-api:ManageConnections', Effect: 'Allow' })]),
+    );
+    expect(statements).toEqual(
+      expect.arrayContaining([expect.objectContaining({ Action: expect.arrayContaining(['dynamodb:Query']), Effect: 'Allow' })]),
+    );
+  });
+
+  test('the HTTP handler has both WEBSOCKET_ENDPOINT and CONNECTIONS_TABLE env vars (IAM grants alone aren\'t enough — the handler reads these directly)', () => {
+    template.hasResourceProperties('AWS::Lambda::Function', {
+      Environment: {
+        Variables: Match.objectLike({
+          WEBSOCKET_ENDPOINT: Match.objectLike({ 'Fn::Join': Match.anyValue() }),
+          CONNECTIONS_TABLE: Match.anyValue(),
+        }),
+      },
+    });
+  });
 });

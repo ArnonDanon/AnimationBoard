@@ -3,14 +3,19 @@ import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { BatchGetCommand, DeleteCommand, DynamoDBDocumentClient, GetCommand, PutCommand, QueryCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
 import { GetObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { CognitoIdentityProviderClient, ListUsersCommand } from '@aws-sdk/client-cognito-identity-provider';
+import { ApiGatewayManagementApiClient, PostToConnectionCommand, GoneException } from '@aws-sdk/client-apigatewaymanagementapi';
 import { createDocument, exportSnapshot } from '@animationboard/drawing-engine/document-model';
 
-const ddb = DynamoDBDocumentClient.from(new DynamoDBClient({}));
+// removeUndefinedValues: getCallerEmail() can return undefined (e.g. a token missing
+// the email claim), and PutCommand would otherwise throw rather than just omitting it.
+const ddb = DynamoDBDocumentClient.from(new DynamoDBClient({}), { marshallOptions: { removeUndefinedValues: true } });
 const s3 = new S3Client({});
 const cognito = new CognitoIdentityProviderClient({});
+const apiGw = new ApiGatewayManagementApiClient({ endpoint: process.env.WEBSOCKET_ENDPOINT! });
 
 const PROJECTS_TABLE = process.env.PROJECTS_TABLE!;
 const MEMBERS_TABLE = process.env.MEMBERS_TABLE!;
+const CONNECTIONS_TABLE = process.env.CONNECTIONS_TABLE!;
 const DOCUMENTS_BUCKET = process.env.DOCUMENTS_BUCKET!;
 const USER_POOL_ID = process.env.USER_POOL_ID!;
 
@@ -23,6 +28,17 @@ interface Membership {
   animatorId: string;
   role: 'owner' | 'collaborator';
   invitedAt: string;
+  // Denormalized at write time (snapshot, not a live reference — same pattern the
+  // domain model already uses for Personal Library -> Document) so listing/viewing
+  // members never needs a Cognito lookup. Absent on rows created before this field
+  // existed.
+  email?: string;
+}
+
+interface Connection {
+  connectionId: string;
+  projectId: string;
+  animatorId: string;
 }
 
 interface Project {
@@ -39,6 +55,11 @@ function respond(statusCode: number, body: unknown): APIGatewayProxyResultV2 {
 
 function getCallerId(event: APIGatewayProxyEventV2WithJWTAuthorizer): string {
   return String(event.requestContext.authorizer.jwt.claims.sub);
+}
+
+function getCallerEmail(event: APIGatewayProxyEventV2WithJWTAuthorizer): string | undefined {
+  const email = event.requestContext.authorizer.jwt.claims.email;
+  return typeof email === 'string' ? email : undefined;
 }
 
 function documentKey(projectId: string): string {
@@ -76,7 +97,12 @@ async function createProject(event: APIGatewayProxyEventV2WithJWTAuthorizer, cal
   const now = new Date().toISOString();
 
   await ddb.send(new PutCommand({ TableName: PROJECTS_TABLE, Item: { projectId, name, ownerId: callerId, createdAt: now, updatedAt: now } }));
-  await ddb.send(new PutCommand({ TableName: MEMBERS_TABLE, Item: { projectId, animatorId: callerId, role: 'owner', invitedAt: now } }));
+  await ddb.send(
+    new PutCommand({
+      TableName: MEMBERS_TABLE,
+      Item: { projectId, animatorId: callerId, role: 'owner', invitedAt: now, email: getCallerEmail(event) },
+    }),
+  );
 
   // Seed an empty document immediately so load-document never has to special-case
   // "project exists but nothing was ever saved yet".
@@ -167,8 +193,49 @@ async function shareProject(event: APIGatewayProxyEventV2WithJWTAuthorizer, proj
 
   if (await getMembership(projectId, sub)) return respond(409, { error: 'already a member of this project' });
 
-  await ddb.send(new PutCommand({ TableName: MEMBERS_TABLE, Item: { projectId, animatorId: sub, role: 'collaborator', invitedAt: new Date().toISOString() } }));
+  await ddb.send(
+    new PutCommand({
+      TableName: MEMBERS_TABLE,
+      Item: { projectId, animatorId: sub, role: 'collaborator', invitedAt: new Date().toISOString(), email },
+    }),
+  );
   return respond(201, { ok: true });
+}
+
+async function revokeMember(projectId: string, targetAnimatorId: string, callerId: string): Promise<APIGatewayProxyResultV2> {
+  const callerMembership = await getMembership(projectId, callerId);
+  if (!callerMembership || callerMembership.role !== 'owner') return respond(403, { error: 'only the owner can revoke access' });
+
+  const target = await getMembership(projectId, targetAnimatorId);
+  if (!target) return respond(404, { error: 'not a member of this project' });
+  if (target.role === 'owner') return respond(400, { error: "the owner's own access can't be revoked this way — delete the project instead" });
+
+  await ddb.send(new DeleteCommand({ TableName: MEMBERS_TABLE, Key: { projectId, animatorId: targetAnimatorId } }));
+
+  // Membership is gone, so the revoked user can never reconnect (the $connect
+  // authorizer re-checks membership on every handshake) — but an already-open socket
+  // isn't automatically dropped. Kick any live connection(s) now so revoke takes
+  // effect immediately rather than on their next reload.
+  const connections = await ddb.send(
+    new QueryCommand({
+      TableName: CONNECTIONS_TABLE,
+      IndexName: 'byAnimator',
+      KeyConditionExpression: 'animatorId = :a AND projectId = :p',
+      ExpressionAttributeValues: { ':a': targetAnimatorId, ':p': projectId },
+    }),
+  );
+  const targetConnections = (connections.Items ?? []) as Connection[];
+  await Promise.all(
+    targetConnections.map(async (conn) => {
+      try {
+        await apiGw.send(new PostToConnectionCommand({ ConnectionId: conn.connectionId, Data: Buffer.from(JSON.stringify({ type: 'revoked' })) }));
+      } catch (err) {
+        if (!(err instanceof GoneException)) throw err;
+      }
+    }),
+  );
+
+  return respond(200, { ok: true });
 }
 
 async function loadDocument(projectId: string, callerId: string): Promise<APIGatewayProxyResultV2> {
@@ -229,6 +296,11 @@ export const handler: APIGatewayProxyHandlerV2WithJWTAuthorizer = async (event) 
       if (action === 'share' && method === 'POST') return await shareProject(event, projectId, callerId);
       if (action === 'document' && method === 'GET') return await loadDocument(projectId, callerId);
       if (action === 'document' && method === 'PUT') return await saveDocument(event, projectId, callerId);
+    }
+
+    if (segments.length === 4) {
+      const [, projectId, action, memberId] = segments;
+      if (action === 'members' && method === 'DELETE') return await revokeMember(projectId, memberId, callerId);
     }
 
     return respond(404, { error: 'not found' });
