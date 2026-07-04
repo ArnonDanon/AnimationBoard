@@ -123,6 +123,21 @@ multi-point stroke rendered visibly darker/blotchier than its actual opacity
 painting the stroke opaque to an offscreen layer first, then compositing that
 layer once with the real opacity — reverified pixel-exact after the fix.
 
+**Added after Epic 7** (user request, before moving to Epic 8): adjustable
+size and opacity sliders for the active brush, in the toolbar. `setBrushSize`/
+`setBrushOpacity` in `engine.ts` replace `this.activeBrush` wholesale via
+spread rather than mutating a field in place, and `setActiveBrush` copies the
+selected preset defensively — both needed since `BUILT_IN_BRUSHES` is a
+single shared array reused by every engine instance; without this, adjusting
+"Pencil"'s size would permanently change the Pencil preset for the rest of
+the session. Selecting a brush resets size/opacity to that preset's own
+defaults (not remembered per-brush across switches — simplest predictable
+behavior for a POC). Verified live: default Pencil is thin/opaque, dragging
+Size to 20 visibly thickens new strokes, dragging Opacity to 30% produces
+the correct alpha (measured), and — the actual regression this needs to
+guard against — switching to Marker and back to Pencil shows Pencil's
+original size/opacity, not the tweaked values or Marker's.
+
 ## Epic 5 — Eraser
 
 Goal: FR-ERASE-1..3.

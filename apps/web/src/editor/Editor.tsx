@@ -62,7 +62,7 @@ export function Editor({ animatorId }: EditorProps) {
           Eraser
         </button>
         {activeTool === 'eraser' && (
-          <label className="eraser-size">
+          <label className="slider-control">
             Size
             <input
               type="range"
@@ -85,6 +85,28 @@ export function Editor({ animatorId }: EditorProps) {
             {brush.name}
           </button>
         ))}
+        <label className="slider-control">
+          Size
+          <input
+            type="range"
+            min={1}
+            max={30}
+            disabled={activeTool !== 'brush'}
+            value={engine?.getActiveBrush().baseWidth ?? 1}
+            onChange={(e) => engine?.setBrushSize(Number(e.target.value))}
+          />
+        </label>
+        <label className="slider-control">
+          Opacity
+          <input
+            type="range"
+            min={5}
+            max={100}
+            disabled={activeTool !== 'brush'}
+            value={Math.round((engine?.getActiveBrush().opacity ?? 1) * 100)}
+            onChange={(e) => engine?.setBrushOpacity(Number(e.target.value) / 100)}
+          />
+        </label>
         <span className="divider" />
         {BUILT_IN_PALETTE.map((color) => (
           <button

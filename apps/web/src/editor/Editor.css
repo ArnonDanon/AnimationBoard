@@ -45,12 +45,16 @@
   outline-offset: 2px;
 }
 
-.eraser-size {
+.slider-control {
   display: flex;
   align-items: center;
   gap: 0.35rem;
   font-size: 0.85rem;
   color: #555;
+}
+
+.slider-control:has(input:disabled) {
+  opacity: 0.4;
 }
 
 .editor-canvas {

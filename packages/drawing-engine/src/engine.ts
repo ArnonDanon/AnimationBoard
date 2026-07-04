@@ -266,7 +266,21 @@ export class DrawingEngine {
   }
 
   setActiveBrush(brush: Brush): void {
-    this.activeBrush = brush;
+    // Copy defensively: BUILT_IN_BRUSHES is a shared module-level array reused by
+    // every engine instance, and setBrushSize/setBrushOpacity replace this.activeBrush
+    // wholesale (never mutate a field in place), so this guards against a future
+    // change accidentally starting to mutate the preset directly.
+    this.activeBrush = { ...brush };
+    this.notify();
+  }
+
+  setBrushSize(size: number): void {
+    this.activeBrush = { ...this.activeBrush, baseWidth: Math.max(1, size) };
+    this.notify();
+  }
+
+  setBrushOpacity(opacity: number): void {
+    this.activeBrush = { ...this.activeBrush, opacity: Math.max(0.05, Math.min(1, opacity)) };
     this.notify();
   }
 
