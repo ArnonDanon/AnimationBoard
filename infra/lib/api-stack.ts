@@ -5,7 +5,7 @@ import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as lambdaNode from 'aws-cdk-lib/aws-lambda-nodejs';
 import * as apigwv2 from 'aws-cdk-lib/aws-apigatewayv2';
 import { HttpLambdaIntegration, WebSocketLambdaIntegration } from 'aws-cdk-lib/aws-apigatewayv2-integrations';
-import { HttpUserPoolAuthorizer } from 'aws-cdk-lib/aws-apigatewayv2-authorizers';
+import { HttpUserPoolAuthorizer, WebSocketLambdaAuthorizer } from 'aws-cdk-lib/aws-apigatewayv2-authorizers';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as cognito from 'aws-cdk-lib/aws-cognito';
@@ -74,36 +74,62 @@ export class ApiStack extends cdk.Stack {
       authorizer: httpAuthorizer,
     });
 
+    const wsAuthorizerHandler = new lambdaNode.NodejsFunction(this, 'WsAuthorizerHandler', {
+      entry: path.join(__dirname, '../lambda/ws/authorizer.ts'),
+      handler: 'handler',
+      runtime: lambda.Runtime.NODEJS_20_X,
+      timeout: cdk.Duration.seconds(10),
+      environment: {
+        MEMBERS_TABLE: props.membersTable.tableName,
+        USER_POOL_ID: props.userPool.userPoolId,
+        USER_POOL_CLIENT_ID: props.userPoolClient.userPoolClientId,
+      },
+    });
+    props.membersTable.grantReadData(wsAuthorizerHandler);
+
     const wsConnectHandler = new lambdaNode.NodejsFunction(this, 'WsConnectHandler', {
       entry: path.join(__dirname, '../lambda/ws/connect.ts'),
       handler: 'handler',
+      environment: { CONNECTIONS_TABLE: props.connectionsTable.tableName },
     });
     const wsDisconnectHandler = new lambdaNode.NodejsFunction(this, 'WsDisconnectHandler', {
       entry: path.join(__dirname, '../lambda/ws/disconnect.ts'),
       handler: 'handler',
+      environment: { CONNECTIONS_TABLE: props.connectionsTable.tableName },
     });
     const wsDefaultHandler = new lambdaNode.NodejsFunction(this, 'WsDefaultHandler', {
       entry: path.join(__dirname, '../lambda/ws/default.ts'),
       handler: 'handler',
+      environment: { CONNECTIONS_TABLE: props.connectionsTable.tableName },
     });
     for (const fn of [wsConnectHandler, wsDisconnectHandler, wsDefaultHandler]) {
       props.connectionsTable.grantReadWriteData(fn);
     }
 
+    // Browsers can't set custom headers on a WebSocket handshake, so the token and
+    // target project travel as query string params instead of an Authorization header.
+    const wsAuthorizer = new WebSocketLambdaAuthorizer('WsAuthorizer', wsAuthorizerHandler, {
+      identitySource: ['route.request.querystring.token', 'route.request.querystring.projectId'],
+    });
+
     const webSocketApi = new apigwv2.WebSocketApi(this, 'WebSocketApi', {
       apiName: 'animationboard-realtime',
-      connectRouteOptions: { integration: new WebSocketLambdaIntegration('WsConnectIntegration', wsConnectHandler) },
+      connectRouteOptions: {
+        integration: new WebSocketLambdaIntegration('WsConnectIntegration', wsConnectHandler),
+        authorizer: wsAuthorizer,
+      },
       disconnectRouteOptions: { integration: new WebSocketLambdaIntegration('WsDisconnectIntegration', wsDisconnectHandler) },
       defaultRouteOptions: { integration: new WebSocketLambdaIntegration('WsDefaultIntegration', wsDefaultHandler) },
     });
+    webSocketApi.grantManageConnections(wsDefaultHandler);
 
-    new apigwv2.WebSocketStage(this, 'WebSocketStage', {
+    const webSocketStage = new apigwv2.WebSocketStage(this, 'WebSocketStage', {
       webSocketApi,
       stageName: 'poc',
       autoDeploy: true,
     });
 
     new cdk.CfnOutput(this, 'HttpApiUrl', { value: httpApi.apiEndpoint });
-    new cdk.CfnOutput(this, 'WebSocketApiUrl', { value: webSocketApi.apiEndpoint });
+    new cdk.CfnOutput(this, 'WebSocketApiUrl', { value: webSocketStage.url });
   }
 }

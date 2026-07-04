@@ -23,9 +23,13 @@ export interface ProjectDetail extends ProjectSummary {
   members: ProjectMember[]
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+export async function getIdToken(): Promise<string | undefined> {
   const session = await fetchAuthSession()
-  const token = session.tokens?.idToken?.toString()
+  return session.tokens?.idToken?.toString()
+}
+
+async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const token = await getIdToken()
   const headers: Record<string, string> = { 'Content-Type': 'application/json', ...(init?.headers as Record<string, string> | undefined) }
   if (token) headers.Authorization = `Bearer ${token}`
 

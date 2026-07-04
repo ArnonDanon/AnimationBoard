@@ -39,9 +39,22 @@ export class DataStack extends cdk.Stack {
       timeToLiveAttribute: 'ttl',
       removalPolicy: cdk.RemovalPolicy.DESTROY,
     });
+    // Relay fan-out: given a sender's connectionId, find every other connection open
+    // on the same project (infra/lambda/ws/default.ts).
     this.connectionsTable.addGlobalSecondaryIndex({
       indexName: 'byProject',
       partitionKey: { name: 'projectId', type: dynamodb.AttributeType.STRING },
+    });
+    // Not consumed by any handler yet, but cheap to declare now (table is empty) and
+    // expensive to backfill later: finding/terminating one user's active connections
+    // without a full scan, needed by a future "revoke a collaborator's access" action
+    // (there's no revoke endpoint yet, only share/delete) and by presence/Awareness
+    // (FR-COLLAB-3), both explicitly deferred past this epic — see docs/03-roadmap.md
+    // Epic 10. Mirrors ProjectMembersTable's byAnimator index shape.
+    this.connectionsTable.addGlobalSecondaryIndex({
+      indexName: 'byAnimator',
+      partitionKey: { name: 'animatorId', type: dynamodb.AttributeType.STRING },
+      sortKey: { name: 'projectId', type: dynamodb.AttributeType.STRING },
     });
 
     this.documentsBucket = new s3.Bucket(this, 'DocumentsBucket', {

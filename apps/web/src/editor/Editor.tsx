@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
-import { BUILT_IN_BRUSHES, BUILT_IN_PALETTE, createDocumentFromSnapshot, createEngine } from '@animationboard/drawing-engine'
-import type { DrawingEngine } from '@animationboard/drawing-engine'
-import { getProject, loadDocument, saveDocument } from '../api/client'
+import { BUILT_IN_BRUSHES, BUILT_IN_PALETTE, createDocumentFromSnapshot, createEngine, createRealtimeProvider } from '@animationboard/drawing-engine'
+import type { DrawingEngine, RealtimeProvider } from '@animationboard/drawing-engine'
+import { getIdToken, getProject, loadDocument, saveDocument } from '../api/client'
 import { LayerPanel } from './LayerPanel'
 import { Timeline } from './Timeline'
 import './Editor.css'
@@ -9,6 +9,8 @@ import './Editor.css'
 // Debounce autosave rather than saving on every stroke point — bounds the data-loss
 // window (NFR-DATA-1) without hammering the API while the user is actively drawing.
 const AUTOSAVE_DEBOUNCE_MS = 2500
+
+const WS_API_URL = import.meta.env.VITE_WS_API_URL as string | undefined
 
 interface EditorProps {
   animatorId: string
@@ -33,6 +35,7 @@ export function Editor({ animatorId, projectId, onBack }: EditorProps) {
     let pendingBytes: Uint8Array | null = null
     let unsubscribeTick: (() => void) | null = null
     let unsubscribeAutosave: (() => void) | null = null
+    let realtimeProvider: RealtimeProvider | null = null
 
     setLoadState('loading')
     setSaveStatus('idle')
@@ -65,6 +68,14 @@ export function Editor({ animatorId, projectId, onBack }: EditorProps) {
 
       setLoadState('ready')
       tick((n) => n + 1)
+
+      if (WS_API_URL) {
+        const token = await getIdToken()
+        if (!cancelled && token) {
+          const url = `${WS_API_URL}?token=${encodeURIComponent(token)}&projectId=${encodeURIComponent(projectId)}`
+          realtimeProvider = createRealtimeProvider({ doc: engine.doc, url })
+        }
+      }
     }
 
     init().catch(() => !cancelled && setLoadState('error'))
@@ -75,6 +86,7 @@ export function Editor({ animatorId, projectId, onBack }: EditorProps) {
       flush() // best-effort final save when navigating away or switching projects
       unsubscribeTick?.()
       unsubscribeAutosave?.()
+      realtimeProvider?.destroy()
       if (engineRef.current) {
         engineRef.current.destroy()
         engineRef.current = null

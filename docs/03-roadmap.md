@@ -409,16 +409,55 @@ all. Zero console errors throughout.
 
 Goal: FR-COLLAB-1..3.
 
-- [ ] WebSocket API + Lambda relay (`$connect`/`$disconnect`/`$default`), DynamoDB
-      connections table (ADR-006)
-- [ ] Client: attach Yjs WebSocket provider to the already-existing local `Y.Doc`
-      (no document-model changes needed — this is purely a transport addition per the
-      Sequencing Insight above)
-- [ ] Authorization check on `$connect`: caller must be a ProjectMembership member
-- [ ] Multi-tab / two-browser manual test: concurrent edits to different
-      objects/layers don't clobber each other (FR-COLLAB-2)
-- [ ] Presence/cursors via Yjs Awareness (stretch within this epic — skip first if
-      short on time, core requirement is FR-COLLAB-1/2 not FR-COLLAB-3)
+- [x] WebSocket API + Lambda relay (`$connect`/`$disconnect`/`$default`), DynamoDB
+      connections table (ADR-006) — the Epic 1 stubs became real: `connect.ts` writes
+      `{connectionId, projectId, animatorId, ttl}` to `ConnectionsTable`, `disconnect.ts`
+      deletes it, `default.ts` is a pure relay (looks up the sender's `projectId`, queries
+      the `byProject` GSI for sibling connections, `PostToConnectionCommand`s the same
+      bytes to each, deleting any that come back `GoneException`) — never inspects or
+      merges the Yjs update itself, per ADR-006
+- [x] Client: attach a realtime provider to the already-existing local `Y.Doc` — no
+      document-model changes, a pure transport addition per the Sequencing Insight
+      above. `packages/drawing-engine/src/realtime.ts`'s `RealtimeProvider` sends local
+      updates (Yjs transaction origin `null`) and applies inbound ones with itself as
+      origin — this doubles as both echo-loop prevention and (for free, since
+      `Y.UndoManager` only tracks origin `null` by default) keeping a collaborator's
+      edits out of your own undo stack. Wired into `Editor.tsx` after the existing HTTP
+      snapshot load (Epic 9), alongside the engine's own lifecycle
+- [x] Authorization check on `$connect`: caller must be a ProjectMembership member —
+      `infra/lambda/ws/authorizer.ts`, a WebSocket Lambda REQUEST authorizer (WebSocket
+      APIs don't support the `HttpUserPoolAuthorizer` type HTTP uses, only Lambda/IAM).
+      Verifies the Cognito ID token via `aws-jwt-verify` and checks `MEMBERS_TABLE`
+      directly. Token + target project travel as query-string params
+      (`?token=...&projectId=...`), not a header — browsers can't set custom headers on
+      a WebSocket handshake
+- [x] Multi-tab / two-browser manual test: concurrent edits to different
+      objects/layers don't clobber each other (FR-COLLAB-2) — verified against the real
+      deployed stack with two throwaway Cognito test users (created/deleted via AWS CLI
+      for the test, not left behind): solo edits sync in both directions, true
+      simultaneous edits to different regions both land without clobbering (confirmed
+      by diffing each side's actual Y.Doc object list, not just pixels), the app keeps
+      working after a collaborator disconnects, and their connection row is cleaned up
+- [ ] Presence/cursors via Yjs Awareness (stretch within this epic — skipped per the
+      roadmap's own guidance; core requirement was FR-COLLAB-1/2, not FR-COLLAB-3)
+
+**Bug caught during verification** (not in the relay Lambda — in the client provider):
+edits made while the WebSocket was still completing its handshake (most visible on the
+very first connection of a fresh deploy, where the authorizer Lambda's cold start plus
+its first-ever JWKS fetch from Cognito can take a few seconds) were silently dropped
+from the realtime channel instead of just delayed, because `RealtimeProvider` only sent
+an update if the socket was already `OPEN`. Fixed by queueing updates made while
+connecting/reconnecting and flushing the queue on `ws.onopen` — the edit was never lost
+locally (it's still in the Y.Doc, autosaved via the existing HTTP path), only excluded
+from that session's live broadcast to collaborators. Verified live by drawing
+immediately after opening a freshly-shared project, before any connect settle delay.
+
+Also worth noting for future debugging: the very first apparent test failures (a
+stroke seemingly never arriving on the other side) turned out to be the *test script's*
+fixed wait times being shorter than real end-to-end relay latency under cold-Lambda or
+CDP-console-logging load, not a product bug — confirmed by polling for the expected
+pixel for up to 10s instead of a fixed delay, and by diffing both sides' actual Y.Doc
+object lists directly rather than trusting pixel checks alone.
 
 ## Epic 11 — Stretch Goals (only if time remains, in this order)
 

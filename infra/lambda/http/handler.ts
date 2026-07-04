@@ -3,7 +3,7 @@ import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { BatchGetCommand, DeleteCommand, DynamoDBDocumentClient, GetCommand, PutCommand, QueryCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
 import { GetObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { CognitoIdentityProviderClient, ListUsersCommand } from '@aws-sdk/client-cognito-identity-provider';
-import { createDocument, exportSnapshot } from '@animationboard/drawing-engine';
+import { createDocument, exportSnapshot } from '@animationboard/drawing-engine/document-model';
 
 const ddb = DynamoDBDocumentClient.from(new DynamoDBClient({}));
 const s3 = new S3Client({});
@@ -23,6 +23,14 @@ interface Membership {
   animatorId: string;
   role: 'owner' | 'collaborator';
   invitedAt: string;
+}
+
+interface Project {
+  projectId: string;
+  name: string;
+  ownerId: string;
+  createdAt: string;
+  updatedAt: string;
 }
 
 function respond(statusCode: number, body: unknown): APIGatewayProxyResultV2 {
@@ -90,8 +98,13 @@ async function listProjects(callerId: string): Promise<APIGatewayProxyResultV2> 
   if (items.length === 0) return respond(200, { projects: [] });
 
   const batch = await ddb.send(new BatchGetCommand({ RequestItems: { [PROJECTS_TABLE]: { Keys: items.map((m) => ({ projectId: m.projectId })) } } }));
-  const projectsById = new Map((batch.Responses?.[PROJECTS_TABLE] ?? []).map((p) => [p.projectId as string, p]));
-  const projects = items.map((m) => ({ ...projectsById.get(m.projectId), role: m.role })).filter((p) => p.projectId);
+  const projectsById = new Map((batch.Responses?.[PROJECTS_TABLE] as Project[] | undefined ?? []).map((p) => [p.projectId, p]));
+  const projects = items
+    .map((m) => {
+      const project = projectsById.get(m.projectId);
+      return project ? { ...project, role: m.role } : undefined;
+    })
+    .filter((p): p is Project & { role: Membership['role'] } => p !== undefined);
 
   return respond(200, { projects });
 }

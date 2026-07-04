@@ -1,7 +1,7 @@
 import * as Y from 'yjs';
-import { generateId } from './id';
-import { DEFAULT_TRANSFORM } from './types';
-import type { FrameData, LayerData, Style, VectorObjectData } from './types';
+import { generateId } from './id.js';
+import { DEFAULT_TRANSFORM } from './types.js';
+import type { FrameData, LayerData, Style, VectorObjectData } from './types.js';
 
 export type YObject = Y.Map<unknown>;
 export type YLayer = Y.Map<unknown>;

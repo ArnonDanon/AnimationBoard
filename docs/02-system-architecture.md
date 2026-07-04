@@ -105,22 +105,160 @@ Subsystems, all inside the framework-agnostic engine module:
 - **Serializer**: converts between the engine's in-memory model, the Yjs shared types,
   and the flat JSON/binary snapshot format persisted to S3.
 
-## 6. Realtime Collaboration Architecture (summary — full design in Phase 5)
+## 6. Realtime Collaboration Architecture
 
-- Each connected client holds a full **Yjs `Y.Doc` replica**. Edits are applied locally
-  first (instant local feedback, satisfies NFR-PERF-1 regardless of network latency),
-  then Yjs produces a small binary update, sent over the WebSocket to the Lambda relay,
-  which fans it out to other connections in the same project room. Every client merges
-  incoming updates via Yjs — **no server-side merge logic to write or get wrong**
-  (this is the main reason Yjs was chosen over a hand-rolled OT/locking scheme; see
-  ADR-003).
-- **Presence/cursors** (FR-COLLAB-3, stretch): Yjs's Awareness protocol, riding the same
-  WebSocket channel — no separate infrastructure.
-- **Persistence**: periodically (debounced after edits stop, and on clean disconnect)
-  the client encodes the current Yjs doc state and POSTs it to the HTTP API, which
-  writes it to S3 keyed by `documentId`. Opening a project fetches this snapshot and
-  hydrates a fresh `Y.Doc` from it. This keeps the WebSocket relay itself stateless and
-  disposable — it holds no durable state, only in-flight messages.
+Built in Epic 10; this section describes the actual implementation (superseding the
+pre-build summary this section used to contain — see `docs/03-roadmap.md` Epic 10 for
+the build history and the bug found during verification).
+
+### 6.1 Wire protocol and message flow
+
+1. **Connect**: the client opens `wss://.../poc?token=<CognitoIdToken>&projectId=<id>`.
+   Browsers can't set custom headers on a WebSocket handshake, so both values travel as
+   query-string parameters instead of an `Authorization` header.
+2. **Authorization** (`infra/lambda/ws/authorizer.ts`): a Lambda **REQUEST** authorizer
+   (the only authorizer type WebSocket APIs support — there's no WebSocket equivalent of
+   the HTTP API's built-in Cognito User Pool authorizer) verifies the ID token via
+   `aws-jwt-verify`, then checks `ProjectMembersTable` for a membership row. Allow
+   returns an IAM policy plus `{ animatorId, projectId }` in the authorizer context;
+   Deny rejects the handshake outright — a non-member never reaches `$connect`.
+3. **Connect handler** (`connect.ts`) trusts that context and writes one row to
+   `ConnectionsTable`: `{ connectionId, projectId, animatorId, ttl }`. The `ttl`
+   (now + 24h) is a safety net for connections that drop without a clean
+   `$disconnect` (network blip, tab killed) — DynamoDB TTL eventually reaps them even
+   if nothing else does.
+4. **Sending an edit**: the client's `RealtimeProvider` (`packages/drawing-engine/src/realtime.ts`)
+   listens for `doc.on('update', ...)`. Every local edit — a stroke, an erase, adding a
+   frame, reordering a layer, all of it — produces a small Yjs binary update, which gets
+   base64-encoded into `{ type: 'update', update: '<base64>' }` and sent as a WebSocket
+   **text frame** (JSON, not binary — sidesteps API Gateway's binary-frame handling
+   entirely, matching the base64-in-JSON convention the HTTP snapshot save/load already
+   uses).
+5. **Relay** (`default.ts`) is a **pure fan-out, per ADR-006** — it never inspects or
+   merges the Yjs payload. It looks up the sender's `projectId` from `ConnectionsTable`
+   (by `connectionId`), queries the `byProject` GSI for every other connection on that
+   project, and `PostToConnectionCommand`s the identical bytes to each one. A
+   `GoneException` (recipient's socket is dead) deletes that stale row and moves on —
+   it doesn't fail the whole relay.
+6. **Receiving an edit**: the recipient's `RealtimeProvider` applies the bytes via
+   `Y.applyUpdate(doc, bytes, this)` — passing the provider instance itself as the Yjs
+   transaction **origin**. This one line does two jobs at once:
+   - `doc.on('update', ...)` on the receiving provider checks `origin === this` and
+     skips re-sending — without this, the update would bounce back out to the relay and
+     everyone would echo each other's edits forever.
+   - `Y.UndoManager` (`packages/drawing-engine/src/history.ts`) only tracks
+     transactions whose origin is `null` (its default `trackedOrigins`). A remote
+     update's origin is the provider instance, never `null`, so it's automatically
+     invisible to the undo stack — you can never accidentally Ctrl+Z a collaborator's
+     edit. This came free from Yjs's own design; nothing extra was written for it.
+7. **Reconnect**: on an unexpected close, the provider retries with capped exponential
+   backoff (starts at 1s, doubles, caps at 15s). Edits made while disconnected or still
+   mid-handshake are queued client-side and flushed once the socket reopens — see the
+   bug note in `docs/03-roadmap.md` Epic 10 for why this queue exists (without it, the
+   very first edit after opening a freshly-shared project could be silently dropped
+   from the realtime channel during the authorizer's cold start).
+8. **Persistence stays independent of all this** (Epic 9, unchanged by Epic 10): each
+   client still autosaves its local `Y.Doc` to S3 via the HTTP API on its own debounce
+   timer, regardless of realtime connectivity. The realtime channel only carries
+   *incremental* updates from the moment a client connects onward — it is not the
+   source of truth and was never meant to replay history; a freshly-opened client
+   always starts from the last saved HTTP snapshot (Epic 9), then layers live updates
+   on top. This is why the relay Lambda can be, and is, completely stateless.
+
+### 6.2 What's shared vs. what's per-viewer local state
+
+The single most important thing to understand: **the whole `Y.Doc` syncs — every
+frame, every layer, every object — regardless of which frame or layer any given user
+happens to be looking at.** There is no concept of "only sync the frame someone's
+currently on." Concretely:
+
+| State | Shared (in the `Y.Doc`) | Local to each browser tab |
+|---|---|---|
+| Frames, layers, vector objects (strokes) | ✅ all of it, always | |
+| Frame/layer add, delete, rename, reorder, visibility, lock | ✅ | |
+| Timeline FPS | ✅ | |
+| Which frame/layer you're currently *viewing* (`activeFrameIndex`/`activeLayerIndex`) | | ✅ (`DrawingEngine` instance fields, never written to the doc) |
+| Selection (which object is selected, drag state) | | ✅ |
+| Active tool, active brush, brush size/opacity, active color | | ✅ (deliberately — see Epic 4 notes: personal tool preference, not project content) |
+| Playback (`isPlaying`, the `setInterval` driving it) | | ✅ |
+
+### 6.3 Concrete scenario: two users on different frames
+
+Say Animator A is looking at Frame 1 and Animator B is looking at Frame 3 of the same
+project, both connected.
+
+- **B draws a stroke on Frame 3.** That edit is committed to the shared `Y.Doc`,
+  broadcast over the WebSocket, and applied to A's local `Y.Doc` too — same as any
+  other edit, because the relay doesn't know or care which frame it touched. **A's
+  screen does not visibly change**, because A is rendering Frame 1, not Frame 3 — the
+  new stroke is sitting in A's document already, just on a frame A isn't looking at. If
+  A later clicks over to Frame 3, it's already there, fully formed, with no additional
+  load or wait.
+- **B adds a new Frame 4.** A's Timeline strip updates live to show it (the Timeline
+  component re-reads `engine.getFrames()` on every doc change, remote or local) — A
+  sees a new frame card appear without doing anything, but A's own `activeFrameIndex`
+  does not jump to it; A stays exactly where they were.
+- **A deletes a layer on Frame 1 while B is also looking at Frame 1.** B's LayerPanel
+  updates live. If B's `activeLayerIndex` pointed at a layer that shifted position (or
+  was the one deleted), it's clamped back into valid bounds automatically — B won't
+  crash or draw into a nonexistent layer, but which layer becomes newly "active" for B
+  isn't something B explicitly chose. Worth knowing if it ever surfaces as a confusing
+  "wait, why am I drawing on this layer" report.
+- **A hits Play.** Only A's view advances through frames on a timer. B's view is
+  completely unaffected — playback is local UI state, never written to the doc, so
+  there's no "someone started playing the animation" signal sent to anyone.
+- **Undo**: A's Ctrl+Z only ever undoes A's own most recent local edit (origin `null`,
+  scoped to the whole frames tree, not just the frame A is viewing) — it can't undo
+  something B did, on any frame, ever.
+
+### 6.4 Gaps vs. a Canva-like experience (deliberately deferred, not overlooked)
+
+What's described above is real-time *document* sync — genuinely solid, verified live
+with two independent Cognito sessions (Epic 10). What it does **not** yet have, and
+what Canva-style tools are usually judged on, is *presence*: any signal about what your
+collaborators are doing right now.
+
+- No cursor/pointer indicator showing where a collaborator's mouse is.
+- No "Animator B is on Frame 3" badge — you can't tell, from the UI, that someone else
+  is even in the project with you, let alone where they're looking.
+- No avatar list of who's currently connected.
+- No live "someone is drawing right now" stroke-in-progress preview — you only see a
+  collaborator's stroke once they finish it and it commits to the doc (their in-progress
+  drag is local-only, same as your own — see `commitStroke` in `engine.ts`).
+
+This is exactly **FR-COLLAB-3**, and it was explicitly scoped out of Epic 10 per the
+roadmap's own instruction ("skip first if short on time, core requirement is
+FR-COLLAB-1/2 not FR-COLLAB-3"). The good news: the mechanism to add it is already
+half-built by construction. Yjs ships an **Awareness** protocol specifically for this
+(ephemeral, non-document state like cursor position and "who's online" — it rides the
+same connection as document updates, doesn't touch the CRDT document itself, and isn't
+persisted). Adding it later would mean: broadcasting small Awareness payloads through
+the *same* relay Lambda (already a generic byte-fanout, would need no changes), and a
+new client-side layer that publishes local cursor position / active-frame index as
+Awareness state and renders other clients' Awareness state as UI (cursor dots, a "B is
+on Frame 3" indicator, an avatar strip). None of the current architecture blocks this —
+it's additive work, not a rearchitecture, precisely because ADR-003 chose Yjs partly
+*for* this reason.
+
+### 6.5 Failure modes worth knowing
+
+- **A non-member's token is rejected at `$connect`** — the authorizer denies before the
+  connect handler ever runs, so there's no connection row, no relay eligibility, nothing
+  to clean up.
+- **A stale/disconnected collaborator doesn't block anyone.** The relay deletes a dead
+  connection's row reactively (on the next `GoneException`), not proactively — so there
+  can be a brief window (until the next message happens to target that dead connection)
+  where a departed collaborator still "counts" as a sibling in the `byProject` query,
+  but this never blocks or slows down delivery to the connections that *are* alive; it
+  only costs one extra failed `PostToConnectionCommand` call, caught and cleaned up
+  inline.
+- **Everything degrades to single-user mode gracefully.** If the WebSocket can't
+  connect at all (network down, backend issue), the editor still works — drawing,
+  undo, layers, frames, all of it — because none of that logic depends on the realtime
+  layer being present. You just don't see anyone else's edits until the connection
+  recovers (autosave to S3 via the HTTP path still works independently). This was true
+  by construction, not by explicit design for this failure case — the `RealtimeProvider`
+  is purely additive to a `Y.Doc` that already worked standalone since Epic 3.
 
 ## 7. Storage / Data Architecture
 
@@ -190,9 +328,17 @@ reconciliation. None of these are precluded by the choices above — they're add
 
 ## 13. Open Questions Carried Forward (into Phase 5 detailed designs)
 
-- Exact DynamoDB table/key design for Projects + Membership + Connections.
-- Exact HTTP API route list and request/response shapes.
-- Exact Yjs shared-type mapping for Timeline/Frame/Layer/VectorObject (Y.Array vs.
-  Y.Map nesting).
-- Snapshot debounce interval and conflict window numbers (ties back to
-  `docs/00-requirements.md` §6).
+All resolved by the actual build (Epics 1–10); kept here for history rather than
+deleted, since the roadmap/ADR docs are where the reasoning behind each answer lives:
+
+- ~~Exact DynamoDB table/key design for Projects + Membership + Connections.~~ — see
+  `infra/lib/data-stack.ts`; `ConnectionsTable` also gained a `byAnimator` GSI in
+  Epic 10, ahead of actually needing it (see the code comment there for why).
+- ~~Exact HTTP API route list and request/response shapes.~~ — `infra/lambda/http/handler.ts`.
+- ~~Exact Yjs shared-type mapping for Timeline/Frame/Layer/VectorObject.~~ —
+  `packages/drawing-engine/src/document.ts`.
+- ~~Snapshot debounce interval and conflict window numbers.~~ — 2.5s autosave debounce
+  (`apps/web/src/editor/Editor.tsx`); realtime sync (§6) makes the "conflict window"
+  question largely moot for connected clients, since edits propagate live rather than
+  only at snapshot time — the debounce now only matters for the last-edit-before-close
+  data-loss window (NFR-DATA-1), not for merge correctness.
