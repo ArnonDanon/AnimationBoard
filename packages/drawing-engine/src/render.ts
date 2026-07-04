@@ -212,8 +212,8 @@ export function renderObject(ctx: CanvasRenderingContext2D, obj: YObject): void 
   else paintStroke(ctx, data.points, data.style, data.transform);
 }
 
-export function renderFrame(ctx: CanvasRenderingContext2D, canvas: HTMLCanvasElement, frame: YFrame): void {
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
+/** The layer/object painting loop, with no clear — see renderFrame/renderOnionSkin. */
+export function paintFrameLayers(ctx: CanvasRenderingContext2D, frame: YFrame): void {
   const layers = getLayersArray(frame);
   for (let i = 0; i < layers.length; i++) {
     const layer = layers.get(i);
@@ -223,4 +223,29 @@ export function renderFrame(ctx: CanvasRenderingContext2D, canvas: HTMLCanvasEle
       renderObject(ctx, objects.get(j));
     }
   }
+}
+
+export function renderFrame(ctx: CanvasRenderingContext2D, canvas: HTMLCanvasElement, frame: YFrame): void {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  paintFrameLayers(ctx, frame);
+}
+
+/**
+ * Paints a frame's layers fully opaque to the shared scratch canvas, then composites
+ * that once onto `ctx` at `opacity` — the same double-alpha-compositing avoidance
+ * `paintStroke` already uses for translucent variable-width strokes (see its comment).
+ * This dims the whole frame uniformly while preserving relative opacity differences
+ * between its own objects, rather than flattening every object to the same alpha.
+ */
+export function renderOnionSkin(ctx: CanvasRenderingContext2D, canvas: HTMLCanvasElement, frame: YFrame, opacity: number): void {
+  const layer = getScratchLayer(canvas.width, canvas.height);
+  const layerCtx = layer.getContext('2d');
+  if (!layerCtx) return;
+  layerCtx.clearRect(0, 0, layer.width, layer.height);
+  paintFrameLayers(layerCtx, frame);
+
+  ctx.save();
+  ctx.globalAlpha = opacity;
+  ctx.drawImage(layer, 0, 0);
+  ctx.restore();
 }

@@ -28,7 +28,7 @@ import type { YFrame, YObject } from './document';
 import { attachPointerCapture } from './input';
 import type { PointerModifiers } from './input';
 import { hitTestFrame } from './geometry';
-import { paintEraserCursor, paintEllipse, paintRect, paintSelectionOutline, paintStroke, renderFrame } from './render';
+import { paintEraserCursor, paintEllipse, paintFrameLayers, paintRect, paintSelectionOutline, paintStroke, renderFrame, renderOnionSkin } from './render';
 import { createUndoManager } from './history';
 import { exportSnapshot as encodeSnapshot } from './serialize';
 import { rotateObject, scaleObject, translateObject } from './transform';
@@ -46,6 +46,8 @@ export interface EngineOptions {
 }
 
 const DEFAULT_ERASER_RADIUS = 12;
+// Fixed for this first version — no adjustment UI yet (see backlog).
+const ONION_SKIN_OPACITY = 0.25;
 
 // Holding Shift while dragging a shape constrains it to a square/circle — the
 // standard Illustrator/Figma/Photoshop convention. Recomputed fresh from the raw
@@ -95,6 +97,9 @@ export class DrawingEngine {
   private lastErasePoint: Point | null = null;
   private hoverPoint: Point | null = null;
   private playbackTimer: ReturnType<typeof setInterval> | null = null;
+  // Personal viewing preference, not project content — not persisted, same category
+  // as brush size/opacity overrides above.
+  private onionSkinEnabled = false;
 
   constructor(options: EngineOptions) {
     this.doc = options.doc ?? createDocument();
@@ -290,8 +295,27 @@ export class DrawingEngine {
     return null;
   }
 
+  private getPreviousFrame(): YFrame | null {
+    const frames = getFramesArray(this.doc);
+    return this.activeFrameIndex > 0 ? frames.get(this.activeFrameIndex - 1) : null;
+  }
+
+  // Clears and paints the current frame's real content, with the dimmed previous
+  // frame underneath when onion skin is on — shared by render() and the two
+  // live-preview variants so the onion overlay never disappears mid-drag.
+  private paintBase(): void {
+    if (!this.onionSkinEnabled) {
+      renderFrame(this.ctx, this.canvas, this.activeFrame);
+      return;
+    }
+    this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+    const previous = this.getPreviousFrame();
+    if (previous) renderOnionSkin(this.ctx, this.canvas, previous, ONION_SKIN_OPACITY);
+    paintFrameLayers(this.ctx, this.activeFrame);
+  }
+
   private render(): void {
-    renderFrame(this.ctx, this.canvas, this.activeFrame);
+    this.paintBase();
     if (this.selectedObjectId) {
       const obj = this.findObjectById(this.selectedObjectId);
       if (obj) {
@@ -305,7 +329,7 @@ export class DrawingEngine {
   }
 
   private renderWithLiveStroke(): void {
-    renderFrame(this.ctx, this.canvas, this.activeFrame);
+    this.paintBase();
     if (this.drawingPoints) {
       const style = resolveStrokeStyle(this.activeBrush, this.drawingPoints, this.activeColor);
       paintStroke(this.ctx, this.drawingPoints, style, DEFAULT_TRANSFORM);
@@ -313,7 +337,7 @@ export class DrawingEngine {
   }
 
   private renderWithLiveShape(): void {
-    renderFrame(this.ctx, this.canvas, this.activeFrame);
+    this.paintBase();
     if (this.shapeOrigin && this.shapeCurrent) {
       const style = { color: this.activeColor, width: 1, opacity: 1 };
       const points = [this.shapeOrigin, this.shapeCurrent];
@@ -409,6 +433,15 @@ export class DrawingEngine {
 
   setEraserRadius(radius: number): void {
     this.eraserRadius = radius;
+    this.notify();
+  }
+
+  getOnionSkinEnabled(): boolean {
+    return this.onionSkinEnabled;
+  }
+
+  setOnionSkinEnabled(enabled: boolean): void {
+    this.onionSkinEnabled = enabled;
     this.notify();
   }
 

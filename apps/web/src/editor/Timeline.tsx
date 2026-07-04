@@ -11,6 +11,7 @@ export function Timeline({ engine }: TimelineProps) {
   const activeIndex = engine?.getActiveFrameIndex() ?? 0
   const isPlaying = engine?.getIsPlaying() ?? false
   const fps = engine?.getFps() ?? 12
+  const onionSkinEnabled = engine?.getOnionSkinEnabled() ?? false
 
   return (
     <div className="timeline">
@@ -29,6 +30,14 @@ export function Timeline({ engine }: TimelineProps) {
           />
         </label>
         <button onClick={() => engine?.addFrame(`Frame ${frames.length + 1}`)}>+ Add Frame</button>
+        <span className="divider" />
+        <button
+          className={onionSkinEnabled ? 'onion-toggle active' : 'onion-toggle'}
+          title="Show the previous frame dimmed underneath, to help keep motion consistent"
+          onClick={() => engine?.setOnionSkinEnabled(!onionSkinEnabled)}
+        >
+          🧅 Onion Skin
+        </button>
       </div>
       <ul className="frame-strip">
         {frames.map((frame, index) => (
