@@ -98,6 +98,26 @@ export function Editor({ animatorId, projectId, onBack }: EditorProps) {
     }
   }, [projectId, animatorId])
 
+  useEffect(() => {
+    function handleKeyDown(e: KeyboardEvent) {
+      const target = e.target as HTMLElement | null
+      // Don't hijack Ctrl/Cmd+Z while renaming a project/frame/layer etc. — that
+      // should undo text edits in the input, not the drawing document.
+      const isEditableTarget = target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)
+      if (isEditableTarget) return
+
+      const isCtrlOrCmd = e.ctrlKey || e.metaKey
+      if (!isCtrlOrCmd || e.key.toLowerCase() !== 'z') return
+
+      e.preventDefault()
+      if (e.shiftKey) engineRef.current?.redo()
+      else engineRef.current?.undo()
+    }
+
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [])
+
   const engine = engineRef.current
   const activeTool = engine?.getActiveTool() ?? 'brush'
   // Shapes are solid-fill at the active color too, not just brush strokes — the
