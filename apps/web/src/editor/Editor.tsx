@@ -18,7 +18,7 @@ interface EditorProps {
   onBack: () => void
 }
 
-type LoadState = 'loading' | 'ready' | 'error'
+type LoadState = 'loading' | 'ready' | 'error' | 'revoked'
 type SaveStatus = 'idle' | 'saving' | 'saved' | 'error'
 
 export function Editor({ animatorId, projectId, onBack }: EditorProps) {
@@ -73,7 +73,11 @@ export function Editor({ animatorId, projectId, onBack }: EditorProps) {
         const token = await getIdToken()
         if (!cancelled && token) {
           const url = `${WS_API_URL}?token=${encodeURIComponent(token)}&projectId=${encodeURIComponent(projectId)}`
-          realtimeProvider = createRealtimeProvider({ doc: engine.doc, url })
+          realtimeProvider = createRealtimeProvider({
+            doc: engine.doc,
+            url,
+            onRevoked: () => !cancelled && setLoadState('revoked'),
+          })
         }
       }
     }
@@ -101,6 +105,15 @@ export function Editor({ animatorId, projectId, onBack }: EditorProps) {
     return (
       <div className="editor">
         <p className="dashboard-error">Failed to load this project.</p>
+        <button onClick={onBack}>← Back to projects</button>
+      </div>
+    )
+  }
+
+  if (loadState === 'revoked') {
+    return (
+      <div className="editor">
+        <p className="dashboard-error">The owner revoked your access to this project.</p>
         <button onClick={onBack}>← Back to projects</button>
       </div>
     )

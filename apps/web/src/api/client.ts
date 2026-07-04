@@ -17,6 +17,7 @@ export interface ProjectMember {
   animatorId: string
   role: 'owner' | 'collaborator'
   invitedAt: string
+  email?: string
 }
 
 export interface ProjectDetail extends ProjectSummary {
@@ -61,6 +62,10 @@ export function deleteProject(projectId: string): Promise<{ ok: true }> {
 
 export function shareProject(projectId: string, email: string): Promise<{ ok: true }> {
   return request(`/projects/${projectId}/share`, { method: 'POST', body: JSON.stringify({ email }) })
+}
+
+export function revokeMember(projectId: string, animatorId: string): Promise<{ ok: true }> {
+  return request(`/projects/${projectId}/members/${animatorId}`, { method: 'DELETE' })
 }
 
 export async function loadDocument(projectId: string): Promise<Uint8Array> {

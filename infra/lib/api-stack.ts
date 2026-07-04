@@ -32,6 +32,7 @@ export class ApiStack extends cdk.Stack {
       environment: {
         PROJECTS_TABLE: props.projectsTable.tableName,
         MEMBERS_TABLE: props.membersTable.tableName,
+        CONNECTIONS_TABLE: props.connectionsTable.tableName,
         DOCUMENTS_BUCKET: props.documentsBucket.bucketName,
         USER_POOL_ID: props.userPool.userPoolId,
       },
@@ -128,6 +129,13 @@ export class ApiStack extends cdk.Stack {
       stageName: 'poc',
       autoDeploy: true,
     });
+
+    // Lets the HTTP handler kick a revoked collaborator's already-open WebSocket
+    // connection (see revokeMember in lambda/http/handler.ts) — same management API
+    // endpoint shape infra/lambda/ws/default.ts builds per-request from the event.
+    httpHandler.addEnvironment('WEBSOCKET_ENDPOINT', `https://${webSocketApi.apiId}.execute-api.${this.region}.amazonaws.com/${webSocketStage.stageName}`);
+    props.connectionsTable.grantReadData(httpHandler);
+    webSocketApi.grantManageConnections(httpHandler);
 
     new cdk.CfnOutput(this, 'HttpApiUrl', { value: httpApi.apiEndpoint });
     new cdk.CfnOutput(this, 'WebSocketApiUrl', { value: webSocketStage.url });
