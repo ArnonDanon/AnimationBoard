@@ -24,6 +24,19 @@
   width: 3.5rem;
 }
 
+.timeline-controls .divider {
+  width: 1px;
+  height: 1.5rem;
+  background: #ccc;
+  margin: 0 0.25rem;
+}
+
+.onion-toggle.active {
+  background: #3355dd;
+  color: #fff;
+  border-color: #3355dd;
+}
+
 .frame-strip {
   list-style: none;
   margin: 0;
