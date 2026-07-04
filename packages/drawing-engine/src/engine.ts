@@ -26,8 +26,9 @@ import {
 } from './document';
 import type { YFrame, YObject } from './document';
 import { attachPointerCapture } from './input';
+import type { PointerModifiers } from './input';
 import { hitTestFrame } from './geometry';
-import { paintEraserCursor, paintSelectionOutline, paintStroke, renderFrame } from './render';
+import { paintEraserCursor, paintEllipse, paintRect, paintSelectionOutline, paintStroke, renderFrame } from './render';
 import { createUndoManager } from './history';
 import { exportSnapshot as encodeSnapshot } from './serialize';
 import { rotateObject, scaleObject, translateObject } from './transform';
@@ -46,6 +47,23 @@ export interface EngineOptions {
 
 const DEFAULT_ERASER_RADIUS = 12;
 
+// Holding Shift while dragging a shape constrains it to a square/circle — the
+// standard Illustrator/Figma/Photoshop convention. Recomputed fresh from the raw
+// pointer position on every move/end event (rather than latched once at drag start),
+// so releasing or pressing Shift mid-drag takes effect immediately, matching what
+// those tools do.
+function constrainToSquare(origin: Point, current: Point, shiftKey: boolean): Point {
+  if (!shiftKey) return current;
+  const dx = current.x - origin.x;
+  const dy = current.y - origin.y;
+  const side = Math.max(Math.abs(dx), Math.abs(dy));
+  return {
+    x: origin.x + Math.sign(dx || 1) * side,
+    y: origin.y + Math.sign(dy || 1) * side,
+    pressure: current.pressure,
+  };
+}
+
 export class DrawingEngine {
   readonly doc: Y.Doc;
   private readonly canvas: HTMLCanvasElement;
@@ -58,6 +76,11 @@ export class DrawingEngine {
   private activeFrameIndex = 0;
   private activeLayerIndex = 0;
   private drawingPoints: Point[] | null = null;
+  // Rectangle/ellipse drag state — a start point + the latest (possibly
+  // shift-constrained) point, not a growing array like `drawingPoints`, since a shape
+  // only ever needs its 2 bounding-box corners.
+  private shapeOrigin: Point | null = null;
+  private shapeCurrent: Point | null = null;
   private selectedObjectId: string | null = null;
   private dragOrigin: Point | null = null;
   private activeBrush: Brush = DEFAULT_BRUSH;
@@ -84,9 +107,9 @@ export class DrawingEngine {
 
     this.doc.on('update', () => this.notify());
     this.detachInput = attachPointerCapture(this.canvas, {
-      onStart: (p) => this.handlePointerStart(p),
-      onMove: (p) => this.handlePointerMove(p),
-      onEnd: (p) => this.handlePointerEnd(p),
+      onStart: (p, m) => this.handlePointerStart(p, m),
+      onMove: (p, m) => this.handlePointerMove(p, m),
+      onEnd: (p, m) => this.handlePointerEnd(p, m),
       onHover: (p) => this.handleHover(p),
       onHoverEnd: () => this.handleHoverEnd(),
     });
@@ -104,7 +127,7 @@ export class DrawingEngine {
     return layers.get(Math.min(this.activeLayerIndex, layers.length - 1));
   }
 
-  private handlePointerStart(p: Point): void {
+  private handlePointerStart(p: Point, modifiers: PointerModifiers): void {
     if (this.activeTool === 'colorPicker') {
       this.sampleColorAt(p);
       return;
@@ -124,6 +147,18 @@ export class DrawingEngine {
       return;
     }
 
+    if (this.activeTool === 'rectangle' || this.activeTool === 'ellipse') {
+      const layer = this.activeLayer;
+      if (!layer || !isLayerEditable(layer)) {
+        this.notify();
+        return;
+      }
+      this.shapeOrigin = p;
+      this.shapeCurrent = constrainToSquare(p, p, modifiers.shiftKey);
+      this.notify();
+      return;
+    }
+
     // Brush tool always starts a new stroke — it never hit-tests existing objects.
     // (It used to, which meant starting a stroke close to an existing one would
     // silently select-and-drag that object instead of drawing, corrupting a dense
@@ -137,12 +172,18 @@ export class DrawingEngine {
     this.notify();
   }
 
-  private handlePointerMove(p: Point): void {
+  private handlePointerMove(p: Point, modifiers: PointerModifiers): void {
     if (this.activeTool === 'eraser') {
       if (this.lastErasePoint) {
         this.eraseAt([this.lastErasePoint, p]);
         this.lastErasePoint = p;
       }
+      return;
+    }
+
+    if (this.shapeOrigin) {
+      this.shapeCurrent = constrainToSquare(this.shapeOrigin, p, modifiers.shiftKey);
+      this.renderWithLiveShape();
       return;
     }
 
@@ -160,9 +201,17 @@ export class DrawingEngine {
     }
   }
 
-  private handlePointerEnd(p: Point): void {
+  private handlePointerEnd(p: Point, modifiers: PointerModifiers): void {
     if (this.activeTool === 'eraser') {
       this.lastErasePoint = null;
+      return;
+    }
+
+    if (this.shapeOrigin) {
+      const end = constrainToSquare(this.shapeOrigin, p, modifiers.shiftKey);
+      this.commitShape(this.activeTool as 'rectangle' | 'ellipse', [this.shapeOrigin, end]);
+      this.shapeOrigin = null;
+      this.shapeCurrent = null;
       return;
     }
 
@@ -215,6 +264,21 @@ export class DrawingEngine {
     getObjectsArray(layer).push([obj]);
   }
 
+  // No pressure-sensitivity or outline mode for shapes in this basic version — solid
+  // fill at the active color, full opacity, mirroring how a brush stroke is solid ink.
+  private commitShape(kind: 'rectangle' | 'ellipse', points: Point[]): void {
+    const layer = this.activeLayer;
+    if (!layer || !isLayerEditable(layer)) return;
+    const obj = createVectorObject({
+      kind,
+      points,
+      style: { color: this.activeColor, width: 1, opacity: 1 },
+      transform: { ...DEFAULT_TRANSFORM },
+      createdBy: this.animatorId,
+    });
+    getObjectsArray(layer).push([obj]);
+  }
+
   private findObjectById(id: string): YObject | null {
     const layers = getLayersArray(this.activeFrame);
     for (let i = 0; i < layers.length; i++) {
@@ -245,6 +309,16 @@ export class DrawingEngine {
     if (this.drawingPoints) {
       const style = resolveStrokeStyle(this.activeBrush, this.drawingPoints, this.activeColor);
       paintStroke(this.ctx, this.drawingPoints, style, DEFAULT_TRANSFORM);
+    }
+  }
+
+  private renderWithLiveShape(): void {
+    renderFrame(this.ctx, this.canvas, this.activeFrame);
+    if (this.shapeOrigin && this.shapeCurrent) {
+      const style = { color: this.activeColor, width: 1, opacity: 1 };
+      const points = [this.shapeOrigin, this.shapeCurrent];
+      if (this.activeTool === 'rectangle') paintRect(this.ctx, points, style, DEFAULT_TRANSFORM);
+      else paintEllipse(this.ctx, points, style, DEFAULT_TRANSFORM);
     }
   }
 
@@ -324,6 +398,8 @@ export class DrawingEngine {
   setActiveTool(tool: Tool): void {
     this.activeTool = tool;
     this.selectedObjectId = null;
+    this.shapeOrigin = null;
+    this.shapeCurrent = null;
     this.notify();
   }
 

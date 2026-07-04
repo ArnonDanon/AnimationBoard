@@ -20,6 +20,17 @@ function xRange(points: { x: number }[]): [number, number] {
   return [Math.min(...xs), Math.max(...xs)];
 }
 
+function makeShape(kind: 'rectangle' | 'ellipse', corners: [{ x: number; y: number }, { x: number; y: number }]): VectorObjectData {
+  return {
+    id: 'shape-1',
+    kind,
+    points: corners.map((p) => ({ ...p, pressure: 1 })),
+    style: { color: '#000', width: 1, opacity: 1 },
+    transform: { ...DEFAULT_TRANSFORM },
+    createdBy: 'animator-1',
+  };
+}
+
 describe('eraseFromObjectData', () => {
   it('returns null when the eraser path misses the stroke entirely', () => {
     const stroke = makeStroke([{ x: 0, y: 0 }, { x: 10, y: 0 }]);
@@ -134,6 +145,50 @@ describe('eraseFromObjectData', () => {
     for (const fragment of result!) {
       expect(fragment.style.widths).toHaveLength(fragment.points.length);
     }
+  });
+});
+
+describe('eraseFromObjectData — rectangle/ellipse (whole-object erase, no partial trim)', () => {
+  it('deletes a rectangle entirely when the eraser touches its interior', () => {
+    const rect = makeShape('rectangle', [{ x: 0, y: 0 }, { x: 100, y: 100 }]);
+    const result = eraseFromObjectData(rect, [{ x: 50, y: 50 }], 5);
+    expect(result).toEqual([]); // whole-object removal, never a partial fragment
+  });
+
+  it('deletes a rectangle when the eraser is just within radius of its boundary', () => {
+    const rect = makeShape('rectangle', [{ x: 0, y: 0 }, { x: 100, y: 100 }]);
+    const result = eraseFromObjectData(rect, [{ x: -3, y: 50 }], 5); // 3px outside the left edge, radius 5
+    expect(result).toEqual([]);
+  });
+
+  it('leaves a rectangle untouched when the eraser is outside its radius', () => {
+    const rect = makeShape('rectangle', [{ x: 0, y: 0 }, { x: 100, y: 100 }]);
+    const result = eraseFromObjectData(rect, [{ x: -10, y: 50 }], 5); // 10px outside, radius 5
+    expect(result).toBeNull();
+  });
+
+  it('deletes an ellipse entirely when the eraser touches its interior', () => {
+    const ellipse = makeShape('ellipse', [{ x: 0, y: 0 }, { x: 100, y: 100 }]); // center (50,50), rx=ry=50
+    const result = eraseFromObjectData(ellipse, [{ x: 50, y: 50 }], 5);
+    expect(result).toEqual([]);
+  });
+
+  it('leaves an ellipse untouched when the eraser is outside its radius (corner of the bounding box, outside the inscribed ellipse)', () => {
+    const ellipse = makeShape('ellipse', [{ x: 0, y: 0 }, { x: 100, y: 100 }]);
+    // The bounding box's corner (0,0) is outside the inscribed circle (dist from
+    // center (50,50) is ~70.7, radius 50) — exactly the case isPointInPath would
+    // reject too, distinguishing the ellipse dispatch from a naive rect check.
+    const result = eraseFromObjectData(ellipse, [{ x: 0, y: 0 }], 1);
+    expect(result).toBeNull();
+  });
+
+  it('bakes the shape\'s transform into the world-space hit test', () => {
+    const rect = makeShape('rectangle', [{ x: 0, y: 0 }, { x: 10, y: 10 }]);
+    rect.transform = { x: 100, y: 100, scaleX: 1, scaleY: 1, rotation: 0 };
+    const missedAtLocalOrigin = eraseFromObjectData(rect, [{ x: 5, y: 5 }], 1);
+    expect(missedAtLocalOrigin).toBeNull(); // (5,5) is only inside pre-transform local space
+    const hitAtWorldPosition = eraseFromObjectData(rect, [{ x: 105, y: 105 }], 1);
+    expect(hitAtWorldPosition).toEqual([]);
   });
 });
 

@@ -100,6 +100,9 @@ export function Editor({ animatorId, projectId, onBack }: EditorProps) {
 
   const engine = engineRef.current
   const activeTool = engine?.getActiveTool() ?? 'brush'
+  // Shapes are solid-fill at the active color too, not just brush strokes — the
+  // palette should stay usable for either, unlike the brush-only size/opacity sliders.
+  const usesActiveColor = activeTool === 'brush' || activeTool === 'rectangle' || activeTool === 'ellipse'
 
   if (loadState === 'error') {
     return (
@@ -159,6 +162,20 @@ export function Editor({ animatorId, projectId, onBack }: EditorProps) {
           Eraser
         </button>
         <button
+          className={activeTool === 'rectangle' ? 'brush-button active' : 'brush-button'}
+          title="Drag to draw a rectangle; hold Shift for a square"
+          onClick={() => engine?.setActiveTool('rectangle')}
+        >
+          ▭ Rectangle
+        </button>
+        <button
+          className={activeTool === 'ellipse' ? 'brush-button active' : 'brush-button'}
+          title="Drag to draw an ellipse; hold Shift for a circle"
+          onClick={() => engine?.setActiveTool('ellipse')}
+        >
+          ○ Ellipse
+        </button>
+        <button
           className={activeTool === 'colorPicker' ? 'brush-button active' : 'brush-button'}
           title="Sample a color from the canvas"
           onClick={() => engine?.setActiveTool('colorPicker')}
@@ -215,8 +232,8 @@ export function Editor({ animatorId, projectId, onBack }: EditorProps) {
         {BUILT_IN_PALETTE.map((color) => (
           <button
             key={color}
-            disabled={activeTool !== 'brush'}
-            className={activeTool === 'brush' && engine?.getActiveColor() === color ? 'swatch active' : 'swatch'}
+            disabled={!usesActiveColor}
+            className={usesActiveColor && engine?.getActiveColor() === color ? 'swatch active' : 'swatch'}
             style={{ backgroundColor: color }}
             aria-label={color}
             onClick={() => engine?.setActiveColor(color)}
