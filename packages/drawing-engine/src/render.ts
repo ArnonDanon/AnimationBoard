@@ -101,6 +101,24 @@ function getScratchLayer(width: number, height: number): HTMLCanvasElement {
   return scratchLayer;
 }
 
+// A *separate* buffer from the one above, needed because renderOnionSkin uses a
+// scratch canvas to accumulate an entire frame's worth of objects, while paintStroke
+// (called for each of those objects in turn) also reaches for a scratch canvas of its
+// own for a single translucent/variable-width stroke's compositing. Sharing one
+// canvas between an "accumulate many objects" use and a "compositing one object"
+// use nested inside it meant painting a translucent stroke mid-frame would clearRect
+// away every onion-frame object already drawn before it — a real bug (only the
+// objects painted *after* the last such stroke survived to be composited).
+let onionScratchLayer: HTMLCanvasElement | null = null;
+function getOnionScratchLayer(width: number, height: number): HTMLCanvasElement {
+  if (!onionScratchLayer) onionScratchLayer = document.createElement('canvas');
+  if (onionScratchLayer.width !== width || onionScratchLayer.height !== height) {
+    onionScratchLayer.width = width;
+    onionScratchLayer.height = height;
+  }
+  return onionScratchLayer;
+}
+
 export function paintStroke(ctx: CanvasRenderingContext2D, points: Point[], style: Style, transform: Transform): void {
   if (points.length === 0) return;
 
@@ -231,14 +249,14 @@ export function renderFrame(ctx: CanvasRenderingContext2D, canvas: HTMLCanvasEle
 }
 
 /**
- * Paints a frame's layers fully opaque to the shared scratch canvas, then composites
- * that once onto `ctx` at `opacity` — the same double-alpha-compositing avoidance
- * `paintStroke` already uses for translucent variable-width strokes (see its comment).
- * This dims the whole frame uniformly while preserving relative opacity differences
- * between its own objects, rather than flattening every object to the same alpha.
+ * Paints a frame's layers fully opaque to a dedicated scratch canvas (kept separate
+ * from paintStroke's own — see getOnionScratchLayer's comment for why they can't
+ * share one), then composites that once onto `ctx` at `opacity`. This dims the whole
+ * frame uniformly while preserving relative opacity differences between its own
+ * objects, rather than flattening every object to the same alpha.
  */
 export function renderOnionSkin(ctx: CanvasRenderingContext2D, canvas: HTMLCanvasElement, frame: YFrame, opacity: number): void {
-  const layer = getScratchLayer(canvas.width, canvas.height);
+  const layer = getOnionScratchLayer(canvas.width, canvas.height);
   const layerCtx = layer.getContext('2d');
   if (!layerCtx) return;
   layerCtx.clearRect(0, 0, layer.width, layer.height);
