@@ -100,7 +100,14 @@ function LayerRow({ layer, index, isActive, isOnly, isTop, isBottom, engine }: L
       <button className="layer-icon-button" title="Move up" disabled={isTop} onClick={(e) => { e.stopPropagation(); engine?.moveLayerUp(index) }}>▲</button>
       <button className="layer-icon-button" title="Move down" disabled={isBottom} onClick={(e) => { e.stopPropagation(); engine?.moveLayerDown(index) }}>▼</button>
       <button className="layer-icon-button" title="Duplicate layer" onClick={(e) => { e.stopPropagation(); engine?.duplicateLayer(index) }}>⧉</button>
-      <button className="layer-icon-button" title="Delete layer" disabled={isOnly} onClick={(e) => { e.stopPropagation(); engine?.deleteLayer(index) }}>🗑</button>
+      <button
+        className="layer-icon-button"
+        title={layer.locked ? 'Unlock the layer before deleting it' : 'Delete layer'}
+        disabled={isOnly || layer.locked}
+        onClick={(e) => { e.stopPropagation(); engine?.deleteLayer(index) }}
+      >
+        🗑
+      </button>
     </li>
   )
 }
