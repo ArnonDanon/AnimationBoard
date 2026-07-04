@@ -60,6 +60,11 @@ export class DrawingEngine {
   private selectedObjectId: string | null = null;
   private dragOrigin: Point | null = null;
   private activeBrush: Brush = DEFAULT_BRUSH;
+  // Per-brush size/opacity tweaks, remembered for the lifetime of this engine
+  // instance (not persisted to the document — it's a personal tool preference,
+  // not project content) so switching brushes back and forth keeps each one's
+  // last-used settings instead of resetting to its preset defaults.
+  private readonly brushOverrides = new Map<string, { baseWidth: number; opacity: number }>();
   private activeColor: string = BUILT_IN_PALETTE[0];
   private activeTool: Tool = 'brush';
   private eraserRadius = DEFAULT_ERASER_RADIUS;
@@ -266,21 +271,24 @@ export class DrawingEngine {
   }
 
   setActiveBrush(brush: Brush): void {
-    // Copy defensively: BUILT_IN_BRUSHES is a shared module-level array reused by
-    // every engine instance, and setBrushSize/setBrushOpacity replace this.activeBrush
-    // wholesale (never mutate a field in place), so this guards against a future
-    // change accidentally starting to mutate the preset directly.
-    this.activeBrush = { ...brush };
+    // Reapply this brush's own remembered size/opacity tweak, if the user has
+    // adjusted it before this session — otherwise fall back to the preset's default.
+    const override = this.brushOverrides.get(brush.id);
+    this.activeBrush = override ? { ...brush, ...override } : { ...brush };
     this.notify();
   }
 
   setBrushSize(size: number): void {
-    this.activeBrush = { ...this.activeBrush, baseWidth: Math.max(1, size) };
+    const baseWidth = Math.max(1, size);
+    this.activeBrush = { ...this.activeBrush, baseWidth };
+    this.brushOverrides.set(this.activeBrush.id, { baseWidth, opacity: this.activeBrush.opacity });
     this.notify();
   }
 
   setBrushOpacity(opacity: number): void {
-    this.activeBrush = { ...this.activeBrush, opacity: Math.max(0.05, Math.min(1, opacity)) };
+    const clampedOpacity = Math.max(0.05, Math.min(1, opacity));
+    this.activeBrush = { ...this.activeBrush, opacity: clampedOpacity };
+    this.brushOverrides.set(this.activeBrush.id, { baseWidth: this.activeBrush.baseWidth, opacity: clampedOpacity });
     this.notify();
   }
 
