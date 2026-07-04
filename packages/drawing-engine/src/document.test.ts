@@ -110,6 +110,33 @@ describe('layer management', () => {
     expect(layerToData(layers.get(0)).name).toBe('Layer 2');
   });
 
+  it('refuses to delete a locked layer, even when another layer remains', () => {
+    const doc = createDocument();
+    const frame = getFramesArray(doc).get(0);
+    addLayer(frame, 'Layer 2');
+    const layers = getLayersArray(frame);
+    setLayerLocked(layers.get(0), true);
+
+    const deleted = deleteLayer(frame, 0);
+
+    expect(deleted).toBe(false);
+    expect(getLayersArray(frame).length).toBe(2);
+  });
+
+  it('deletes a previously-locked layer once unlocked', () => {
+    const doc = createDocument();
+    const frame = getFramesArray(doc).get(0);
+    addLayer(frame, 'Layer 2');
+    const layers = getLayersArray(frame);
+    setLayerLocked(layers.get(0), true);
+    setLayerLocked(layers.get(0), false);
+
+    const deleted = deleteLayer(frame, 0);
+
+    expect(deleted).toBe(true);
+    expect(getLayersArray(frame).length).toBe(1);
+  });
+
   it('duplicates a layer with independent copies of its objects, inserted directly above it', () => {
     const doc = createDocument();
     const frame = getFramesArray(doc).get(0);

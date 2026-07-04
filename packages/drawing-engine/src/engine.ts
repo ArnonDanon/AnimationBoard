@@ -522,7 +522,7 @@ export class DrawingEngine {
 
   deleteLayer(index: number): void {
     const removed = deleteLayerFromDoc(this.activeFrame, index);
-    if (!removed) return; // refused: it was the frame's last layer
+    if (!removed) return; // refused: it was the frame's last layer, or the layer is locked
     this.activeLayerIndex = Math.min(this.activeLayerIndex, getLayersArray(this.activeFrame).length - 1);
     // The selected object may have lived on the deleted layer.
     if (this.selectedObjectId && !this.findObjectById(this.selectedObjectId)) {

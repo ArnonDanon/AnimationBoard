@@ -111,10 +111,14 @@ function cloneLayer(layer: YLayer, options: { preserveIds: boolean; nameOverride
   return clone;
 }
 
-/** Refuses to delete the frame's last remaining layer; returns whether it deleted. */
+/**
+ * Refuses to delete the frame's last remaining layer, or a locked layer (unlock it
+ * first); returns whether it deleted.
+ */
 export function deleteLayer(frame: YFrame, index: number): boolean {
   const layers = getLayersArray(frame);
   if (layers.length <= 1) return false;
+  if (layers.get(index).get('locked') === true) return false;
   layers.delete(index, 1);
   return true;
 }
