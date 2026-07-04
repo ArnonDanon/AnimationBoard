@@ -205,7 +205,7 @@ export function moveFrame(doc: Y.Doc, fromIndex: number, toIndex: number): numbe
 export function vectorObjectToData(obj: YObject): VectorObjectData {
   return {
     id: obj.get('id') as string,
-    kind: obj.get('kind') as 'stroke',
+    kind: obj.get('kind') as VectorObjectData['kind'],
     points: obj.get('points') as VectorObjectData['points'],
     style: obj.get('style') as Style,
     transform: (obj.get('transform') as VectorObjectData['transform']) ?? { ...DEFAULT_TRANSFORM },

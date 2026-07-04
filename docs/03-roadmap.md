@@ -461,7 +461,22 @@ object lists directly rather than trusting pixel checks alone.
 
 ## Epic 11 — Stretch Goals (only if time remains, in this order)
 
-- [ ] Basic shape tools (rectangle/circle/square)
+- [x] Basic shape tools (rectangle/circle/square) — two tools (Rectangle, Ellipse),
+      holding Shift while dragging constrains to a square/circle (standard
+      Illustrator/Figma/Photoshop convention), per user choice over a third explicit
+      Square button. Stored as 2 bounding-box corner points, reusing
+      `VectorObjectData.points`/`Transform` — this meant `transform.ts` (move/scale/
+      rotate), `serialize.ts`, `getBoundingBox`, and `paintSelectionOutline` needed
+      zero changes; only rendering (`render.ts`'s `renderObject`) and hit-testing
+      (`geometry.ts`'s `hitTestObject`) needed a kind dispatch, since a filled shape
+      needs `isPointInPath`, not the stroke-only `isPointInStroke`. Solid-fill only in
+      this basic version, no outline mode (future enhancement, not built now — same
+      pattern as the eraser's documented deferred features).
+      Eraser: touching a rectangle/ellipse deletes the whole object (no partial trim —
+      same "no well-defined geometry without real boolean subtraction" gap already
+      documented for thick-stroke erasing in Epic 5). Verified live end-to-end
+      (fill/hit-test/select-move/undo/whole-object-erase/reload-persistence) with a
+      throwaway Cognito test account, cleaned up after.
 - [ ] Second eraser shape/size option
 - [ ] Layer mirroring (horizontal/vertical)
 - [ ] Timeline looping

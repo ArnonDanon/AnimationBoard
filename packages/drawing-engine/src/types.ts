@@ -37,7 +37,8 @@ export interface Transform {
 
 export interface VectorObjectData {
   id: string;
-  kind: 'stroke';
+  /** 'rectangle'/'ellipse' store exactly 2 points — opposite corners of the bounding box. */
+  kind: 'stroke' | 'rectangle' | 'ellipse';
   points: Point[];
   style: Style;
   transform: Transform;
@@ -58,4 +59,4 @@ export interface FrameData {
 
 export const DEFAULT_TRANSFORM: Transform = { x: 0, y: 0, scaleX: 1, scaleY: 1, rotation: 0 };
 
-export type Tool = 'brush' | 'eraser' | 'select' | 'colorPicker';
+export type Tool = 'brush' | 'eraser' | 'select' | 'colorPicker' | 'rectangle' | 'ellipse';

@@ -83,6 +83,28 @@ function minDistanceSegmentToPath(a1: { x: number; y: number }, a2: { x: number;
   return min;
 }
 
+// Rectangle/ellipse geometry, in world space (corners already transform-applied).
+// Only used to decide "did the eraser touch this shape at all" — see the whole-object
+// erase note on eraseFromObjectData for why there's no partial-shape trimming.
+function isPointNearRect(p: { x: number; y: number }, corners: Point[], radius: number): boolean {
+  const minX = Math.min(corners[0].x, corners[1].x) - radius;
+  const maxX = Math.max(corners[0].x, corners[1].x) + radius;
+  const minY = Math.min(corners[0].y, corners[1].y) - radius;
+  const maxY = Math.max(corners[0].y, corners[1].y) + radius;
+  return p.x >= minX && p.x <= maxX && p.y >= minY && p.y <= maxY;
+}
+
+function isPointNearEllipse(p: { x: number; y: number }, corners: Point[], radius: number): boolean {
+  const cx = (corners[0].x + corners[1].x) / 2;
+  const cy = (corners[0].y + corners[1].y) / 2;
+  const rx = Math.abs(corners[1].x - corners[0].x) / 2 + radius;
+  const ry = Math.abs(corners[1].y - corners[0].y) / 2 + radius;
+  if (rx === 0 || ry === 0) return false;
+  const dx = (p.x - cx) / rx;
+  const dy = (p.y - cy) / ry;
+  return dx * dx + dy * dy <= 1;
+}
+
 // Groups surviving (non-erased) indices into consecutive runs — each run becomes its
 // own stroke fragment, which is how a single erase pass can split one stroke into two.
 export function splitSurvivingRuns(count: number, isErased: (index: number) => boolean): number[][] {
@@ -153,6 +175,22 @@ export function eraseFromObjectData(
   erasePath: { x: number; y: number }[],
   eraseRadius: number,
 ): Omit<VectorObjectData, 'id'>[] | null {
+  // Rectangles/ellipses are filled shapes stored as 2 bounding-box corners, not a
+  // polyline — the segment-subdivision/per-point-width logic below assumes stroke
+  // topology and would silently mangle a shape into stroke fragments along its
+  // diagonal if it ran against one. Partial-erase of a filled shape has no
+  // well-defined geometry without real boolean subtraction (same class of gap as the
+  // documented thick-stroke partial-width limitation), so a touch just deletes the
+  // whole object instead.
+  if (data.kind !== 'stroke') {
+    const worldCorners = data.points.map((p) => applyTransform(p, data.transform));
+    if (worldCorners.length < 2) return null;
+    const touched = erasePath.some((p) =>
+      data.kind === 'rectangle' ? isPointNearRect(p, worldCorners, eraseRadius) : isPointNearEllipse(p, worldCorners, eraseRadius),
+    );
+    return touched ? [] : null;
+  }
+
   const rawWorldPoints = data.points.map((p) => applyTransform(p, data.transform));
   const rawWidths = data.points.map((_, i) => data.style.widths?.[i] ?? data.style.width);
 

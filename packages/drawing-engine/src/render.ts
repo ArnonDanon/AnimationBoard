@@ -12,6 +12,28 @@ export function buildStrokePath(points: Point[]): Path2D {
   return path;
 }
 
+/** `points` is the shape's 2 opposite bounding-box corners (see VectorObjectData.kind). */
+export function buildRectPath(points: Point[]): Path2D {
+  const path = new Path2D();
+  if (points.length < 2) return path;
+  const box = getBoundingBox(points);
+  path.rect(box.minX, box.minY, box.maxX - box.minX, box.maxY - box.minY);
+  return path;
+}
+
+/** Ellipse inscribed in the bounding box defined by the shape's 2 opposite corners. */
+export function buildEllipsePath(points: Point[]): Path2D {
+  const path = new Path2D();
+  if (points.length < 2) return path;
+  const box = getBoundingBox(points);
+  const cx = (box.minX + box.maxX) / 2;
+  const cy = (box.minY + box.maxY) / 2;
+  const rx = (box.maxX - box.minX) / 2;
+  const ry = (box.maxY - box.minY) / 2;
+  path.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2);
+  return path;
+}
+
 export function withObjectTransform(ctx: CanvasRenderingContext2D, transform: Transform, fn: () => void): void {
   ctx.save();
   ctx.translate(transform.x, transform.y);
@@ -116,6 +138,27 @@ export function paintStroke(ctx: CanvasRenderingContext2D, points: Point[], styl
   ctx.restore();
 }
 
+// Shapes are solid-fill-only in this basic version (no outline mode) — mirrors how a
+// brush stroke is solid ink, per the eraser's own precedent of documenting deferred
+// features rather than building them speculatively.
+export function paintRect(ctx: CanvasRenderingContext2D, points: Point[], style: Style, transform: Transform): void {
+  if (points.length < 2) return;
+  withObjectTransform(ctx, transform, () => {
+    ctx.fillStyle = style.color;
+    ctx.globalAlpha = style.opacity;
+    ctx.fill(buildRectPath(points));
+  });
+}
+
+export function paintEllipse(ctx: CanvasRenderingContext2D, points: Point[], style: Style, transform: Transform): void {
+  if (points.length < 2) return;
+  withObjectTransform(ctx, transform, () => {
+    ctx.fillStyle = style.color;
+    ctx.globalAlpha = style.opacity;
+    ctx.fill(buildEllipsePath(points));
+  });
+}
+
 // A translucent "heat zone" disc showing exactly what the eraser's radius will
 // reach, plus a thin crosshair pinpointing the exact center — the disc scales
 // with the eraser size, so it's obvious at a glance whether it'll reach a stroke.
@@ -164,7 +207,9 @@ export function paintSelectionOutline(ctx: CanvasRenderingContext2D, points: Poi
 
 export function renderObject(ctx: CanvasRenderingContext2D, obj: YObject): void {
   const data = vectorObjectToData(obj);
-  paintStroke(ctx, data.points, data.style, data.transform);
+  if (data.kind === 'rectangle') paintRect(ctx, data.points, data.style, data.transform);
+  else if (data.kind === 'ellipse') paintEllipse(ctx, data.points, data.style, data.transform);
+  else paintStroke(ctx, data.points, data.style, data.transform);
 }
 
 export function renderFrame(ctx: CanvasRenderingContext2D, canvas: HTMLCanvasElement, frame: YFrame): void {
