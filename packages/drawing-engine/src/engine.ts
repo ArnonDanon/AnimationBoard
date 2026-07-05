@@ -28,7 +28,7 @@ import type { YFrame, YObject } from './document';
 import { attachPointerCapture } from './input';
 import type { PointerModifiers } from './input';
 import { getObjectBoundsPoints, hitTestFrame } from './geometry';
-import { paintEraserCursor, paintEllipse, paintFrameLayers, paintRect, paintSelectionOutline, paintStroke, renderFrame, renderOnionSkin } from './render';
+import { paintEraserCursor, paintEllipse, paintFrameLayers, paintRect, paintSelectionOutline, paintStroke, renderOnionSkin } from './render';
 import { createUndoManager } from './history';
 import { exportSnapshot as encodeSnapshot } from './serialize';
 import { rotateObject, scaleObject, translateObject } from './transform';
@@ -307,15 +307,13 @@ export class DrawingEngine {
   // Suppressed during playback (checked fresh each call, not a separate saved/restored
   // flag) so the animation preview shows only real frame content — the toggle itself
   // is untouched, so onion resumes automatically the moment playback stops.
-  private paintBase(): void {
-    if (!this.onionSkinEnabled || this.getIsPlaying()) {
-      renderFrame(this.ctx, this.canvas, this.activeFrame);
-      return;
-    }
+  private paintBase(liveExtra?: () => void): void {
     this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
-    const previous = this.getPreviousFrame();
-    if (previous) renderOnionSkin(this.ctx, this.canvas, previous, ONION_SKIN_OPACITY);
-    paintFrameLayers(this.ctx, this.activeFrame);
+    if (this.onionSkinEnabled && !this.getIsPlaying()) {
+      const previous = this.getPreviousFrame();
+      if (previous) renderOnionSkin(this.ctx, this.canvas, previous, ONION_SKIN_OPACITY);
+    }
+    paintFrameLayers(this.ctx, this.activeFrame, this.getActiveLayerIndex(), liveExtra);
   }
 
   private render(): void {
@@ -333,21 +331,21 @@ export class DrawingEngine {
   }
 
   private renderWithLiveStroke(): void {
-    this.paintBase();
-    if (this.drawingPoints) {
+    this.paintBase(() => {
+      if (!this.drawingPoints) return;
       const style = resolveStrokeStyle(this.activeBrush, this.drawingPoints, this.activeColor);
       paintStroke(this.ctx, this.drawingPoints, style, DEFAULT_TRANSFORM);
-    }
+    });
   }
 
   private renderWithLiveShape(): void {
-    this.paintBase();
-    if (this.shapeOrigin && this.shapeCurrent) {
+    this.paintBase(() => {
+      if (!this.shapeOrigin || !this.shapeCurrent) return;
       const style = { color: this.activeColor, width: 1, opacity: 1 };
       const points = [this.shapeOrigin, this.shapeCurrent];
       if (this.activeTool === 'rectangle') paintRect(this.ctx, points, style, DEFAULT_TRANSFORM);
       else paintEllipse(this.ctx, points, style, DEFAULT_TRANSFORM);
-    }
+    });
   }
 
   private notify(): void {

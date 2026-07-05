@@ -269,22 +269,24 @@ export function renderObject(ctx: CanvasRenderingContext2D, obj: YObject): void 
   else paintStroke(ctx, data.points, data.style, data.transform);
 }
 
-/** The layer/object painting loop, with no clear — see renderFrame/renderOnionSkin. */
-export function paintFrameLayers(ctx: CanvasRenderingContext2D, frame: YFrame): void {
+/**
+ * The layer/object painting loop, with no clear — see renderFrame/renderOnionSkin.
+ * `activeLayerIndex`/`liveExtra` let a caller (the engine's live-stroke/live-shape
+ * preview) inject an extra paint at the exact z-position of the active layer, instead
+ * of always drawing it on top of every layer regardless of stacking order.
+ */
+export function paintFrameLayers(ctx: CanvasRenderingContext2D, frame: YFrame, activeLayerIndex?: number, liveExtra?: () => void): void {
   const layers = getLayersArray(frame);
   for (let i = 0; i < layers.length; i++) {
     const layer = layers.get(i);
-    if (layer.get('visible') !== true) continue;
-    const objects = getObjectsArray(layer);
-    for (let j = 0; j < objects.length; j++) {
-      renderObject(ctx, objects.get(j));
+    if (layer.get('visible') === true) {
+      const objects = getObjectsArray(layer);
+      for (let j = 0; j < objects.length; j++) {
+        renderObject(ctx, objects.get(j));
+      }
     }
+    if (i === activeLayerIndex) liveExtra?.();
   }
-}
-
-export function renderFrame(ctx: CanvasRenderingContext2D, canvas: HTMLCanvasElement, frame: YFrame): void {
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
-  paintFrameLayers(ctx, frame);
 }
 
 /**

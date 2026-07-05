@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { getTransformPivot } from './render';
+import { addLayer, createDocument, createVectorObject, getFramesArray, getLayersArray, getObjectsArray } from './document';
+import { getTransformPivot, paintFrameLayers } from './render';
+import { DEFAULT_TRANSFORM } from './types';
 import type { Point } from './types';
 
 function pt(x: number, y: number): Point {
@@ -58,5 +60,85 @@ describe('rotation pivot (regression for swinging around canvas origin)', () => 
     const buggyOriginPivot = applyTransform(pt(100, 100), { x: 0, y: 0 }, transform);
     expect(buggyOriginPivot.x).toBeCloseTo(-100);
     expect(buggyOriginPivot.y).toBeCloseTo(-100);
+  });
+});
+
+// buildStrokePath constructs a real Path2D, unavailable in this node test environment
+// (see eraser.test.ts) — stub it globally for this describe block, since the paths
+// themselves are irrelevant to the ordering bug being verified here.
+class StubPath2D {
+  moveTo(): void {}
+  lineTo(): void {}
+  closePath(): void {}
+  rect(): void {}
+  ellipse(): void {}
+}
+(globalThis as unknown as { Path2D: unknown }).Path2D = StubPath2D;
+
+// A stub CanvasRenderingContext2D that just records, in order, which object's stroke
+// got painted (via its distinguishing strokeStyle color) — real canvas paint ops
+// aren't available in this node test environment (see eraser.test.ts), but the bug
+// being fixed here is purely about *ordering*, which this stub can verify precisely
+// without needing to render actual pixels.
+function makeRecordingCtx(order: string[]): CanvasRenderingContext2D {
+  const noop = () => {};
+  const ctx = {
+    save: noop,
+    restore: noop,
+    translate: noop,
+    rotate: noop,
+    scale: noop,
+    beginPath: noop,
+    closePath: noop,
+    moveTo: noop,
+    lineTo: noop,
+    arc: noop,
+    stroke: () => order.push(`stroke:${(ctx as unknown as { strokeStyle: string }).strokeStyle}`),
+  };
+  return ctx as unknown as CanvasRenderingContext2D;
+}
+
+function pushStroke(objects: ReturnType<typeof getObjectsArray>, color: string): void {
+  objects.push([
+    createVectorObject({
+      kind: 'stroke',
+      points: [pt(0, 0), pt(10, 10)],
+      style: { color, width: 2, opacity: 1 },
+      transform: { ...DEFAULT_TRANSFORM },
+      createdBy: 'test',
+    }),
+  ]);
+}
+
+describe('paintFrameLayers live-extra z-order (regression for live stroke always painting on top)', () => {
+  it('paints the live-extra callback right after the active layer, not after every layer', () => {
+    const doc = createDocument();
+    const frame = getFramesArray(doc).get(0);
+    // createDocument already seeds "Layer 1" (index 0) -- add a second layer above it.
+    const layer0 = getLayersArray(frame).get(0);
+    const layer1 = addLayer(frame, 'Layer 2');
+    pushStroke(getObjectsArray(layer0), '#111111');
+    pushStroke(getObjectsArray(layer1), '#222222');
+
+    const order: string[] = [];
+    paintFrameLayers(makeRecordingCtx(order), frame, 0, () => order.push('LIVE'));
+
+    // Active layer is index 0: its own content paints, then the live stroke, then
+    // whatever is stacked above it -- not LIVE tacked onto the very end regardless.
+    expect(order).toEqual(['stroke:#111111', 'LIVE', 'stroke:#222222']);
+  });
+
+  it('moves the live-extra injection point when the active layer changes', () => {
+    const doc = createDocument();
+    const frame = getFramesArray(doc).get(0);
+    const layer0 = getLayersArray(frame).get(0);
+    const layer1 = addLayer(frame, 'Layer 2');
+    pushStroke(getObjectsArray(layer0), '#111111');
+    pushStroke(getObjectsArray(layer1), '#222222');
+
+    const order: string[] = [];
+    paintFrameLayers(makeRecordingCtx(order), frame, 1, () => order.push('LIVE'));
+
+    expect(order).toEqual(['stroke:#111111', 'stroke:#222222', 'LIVE']);
   });
 });
