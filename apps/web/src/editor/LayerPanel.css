@@ -42,6 +42,12 @@
   background: #e6ecff;
 }
 
+.layer-thumbnail {
+  flex-shrink: 0;
+  border: 1px solid #ccc;
+  background: #fff;
+}
+
 .layer-icon-button {
   background: none;
   border: none;

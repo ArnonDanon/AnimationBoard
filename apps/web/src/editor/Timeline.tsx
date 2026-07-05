@@ -1,6 +1,12 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { DrawingEngine, FrameData } from '@animationboard/drawing-engine'
 import './Timeline.css'
+
+const THUMB_WIDTH = 90
+const THUMB_HEIGHT = 56
+// See LayerPanel.tsx's identical comment: debounce so a thumbnail only actually
+// repaints once mutations pause, not on every single doc change (e.g. every stroke point).
+const THUMB_DEBOUNCE_MS = 300
 
 interface TimelineProps {
   engine: DrawingEngine | null
@@ -70,10 +76,19 @@ interface FrameCardProps {
 function FrameCard({ frame, index, isActive, isOnly, isFirst, isLast, engine }: FrameCardProps) {
   const [nameDraft, setNameDraft] = useState(frame.name)
   const [editing, setEditing] = useState(false)
+  const thumbnailRef = useRef<HTMLCanvasElement>(null)
 
   useEffect(() => {
     if (!editing) setNameDraft(frame.name)
   }, [frame.name, editing])
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      const ctx = thumbnailRef.current?.getContext('2d')
+      if (ctx) engine?.renderFrameThumbnail(index, ctx, THUMB_WIDTH, THUMB_HEIGHT)
+    }, THUMB_DEBOUNCE_MS)
+    return () => clearTimeout(timer)
+  })
 
   function commitName() {
     setEditing(false)
@@ -84,6 +99,7 @@ function FrameCard({ frame, index, isActive, isOnly, isFirst, isLast, engine }: 
 
   return (
     <li className={isActive ? 'frame-card active' : 'frame-card'} onClick={() => engine?.setActiveFrameIndex(index)}>
+      <canvas ref={thumbnailRef} width={THUMB_WIDTH} height={THUMB_HEIGHT} className="frame-thumbnail" />
       {editing ? (
         <input
           className="frame-name-input"

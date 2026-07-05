@@ -1,5 +1,5 @@
 import { getLayersArray, getObjectsArray, vectorObjectToData } from './document';
-import type { YFrame, YObject } from './document';
+import type { YFrame, YLayer, YObject } from './document';
 import type { Point, Style, Transform } from './types';
 
 export function buildStrokePath(points: Point[]): Path2D {
@@ -269,6 +269,15 @@ export function renderObject(ctx: CanvasRenderingContext2D, obj: YObject): void 
   else paintStroke(ctx, data.points, data.style, data.transform);
 }
 
+/** A single layer's own objects, with no clear — used both by paintFrameLayers and by
+ *  layer-thumbnail rendering (which needs one layer's content in isolation). */
+export function paintLayerObjects(ctx: CanvasRenderingContext2D, layer: YLayer): void {
+  const objects = getObjectsArray(layer);
+  for (let j = 0; j < objects.length; j++) {
+    renderObject(ctx, objects.get(j));
+  }
+}
+
 /**
  * The layer/object painting loop, with no clear — see renderFrame/renderOnionSkin.
  * `activeLayerIndex`/`liveExtra` let a caller (the engine's live-stroke/live-shape
@@ -279,12 +288,7 @@ export function paintFrameLayers(ctx: CanvasRenderingContext2D, frame: YFrame, a
   const layers = getLayersArray(frame);
   for (let i = 0; i < layers.length; i++) {
     const layer = layers.get(i);
-    if (layer.get('visible') === true) {
-      const objects = getObjectsArray(layer);
-      for (let j = 0; j < objects.length; j++) {
-        renderObject(ctx, objects.get(j));
-      }
-    }
+    if (layer.get('visible') === true) paintLayerObjects(ctx, layer);
     if (i === activeLayerIndex) liveExtra?.();
   }
 }

@@ -1,6 +1,13 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { DrawingEngine, LayerData } from '@animationboard/drawing-engine'
 import './LayerPanel.css'
+
+const THUMB_WIDTH = 40
+const THUMB_HEIGHT = 25
+// Repainting a thumbnail is real canvas work, and every doc mutation re-renders this
+// row (e.g. every single point added while a stroke is being dragged) -- debounce so
+// the thumbnail only actually repaints once the user pauses, not on every mutation.
+const THUMB_DEBOUNCE_MS = 300
 
 interface LayerPanelProps {
   engine: DrawingEngine | null
@@ -51,10 +58,21 @@ interface LayerRowProps {
 function LayerRow({ layer, index, isActive, isOnly, isTop, isBottom, engine }: LayerRowProps) {
   const [nameDraft, setNameDraft] = useState(layer.name)
   const [editing, setEditing] = useState(false)
+  const thumbnailRef = useRef<HTMLCanvasElement>(null)
 
   useEffect(() => {
     if (!editing) setNameDraft(layer.name)
   }, [layer.name, editing])
+
+  // No deps array: re-runs (and resets the timer) on every render, i.e. every doc
+  // change, so the actual repaint only fires once mutations pause for THUMB_DEBOUNCE_MS.
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      const ctx = thumbnailRef.current?.getContext('2d')
+      if (ctx) engine?.renderLayerThumbnail(index, ctx, THUMB_WIDTH, THUMB_HEIGHT)
+    }, THUMB_DEBOUNCE_MS)
+    return () => clearTimeout(timer)
+  })
 
   function commitName() {
     setEditing(false)
@@ -65,6 +83,7 @@ function LayerRow({ layer, index, isActive, isOnly, isTop, isBottom, engine }: L
 
   return (
     <li className={isActive ? 'layer-row active' : 'layer-row'} onClick={() => engine?.setActiveLayerIndex(index)}>
+      <canvas ref={thumbnailRef} width={THUMB_WIDTH} height={THUMB_HEIGHT} className="layer-thumbnail" />
       <button
         className="layer-icon-button"
         title={layer.visible ? 'Hide layer' : 'Show layer'}
