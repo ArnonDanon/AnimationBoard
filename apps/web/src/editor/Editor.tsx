@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { BUILT_IN_BRUSHES, BUILT_IN_PALETTE, createDocumentFromSnapshot, createEngine, createRealtimeProvider } from '@animationboard/drawing-engine'
 import type { DrawingEngine, RealtimeProvider } from '@animationboard/drawing-engine'
 import { getIdToken, getProject, loadDocument, saveDocument } from '../api/client'
+import { ColorWheel } from './ColorWheel'
 import { LayerPanel } from './LayerPanel'
 import { Timeline } from './Timeline'
 import './Editor.css'
@@ -28,6 +29,7 @@ export function Editor({ animatorId, projectId, onBack }: EditorProps) {
   const [loadState, setLoadState] = useState<LoadState>('loading')
   const [projectName, setProjectName] = useState('')
   const [saveStatus, setSaveStatus] = useState<SaveStatus>('idle')
+  const [colorWheelOpen, setColorWheelOpen] = useState(false)
 
   useEffect(() => {
     let cancelled = false
@@ -265,7 +267,20 @@ export function Editor({ animatorId, projectId, onBack }: EditorProps) {
           title={`Current color: ${engine?.getActiveColor() ?? ''}`}
           style={{ backgroundColor: engine?.getActiveColor() }}
         />
+        <button
+          className={colorWheelOpen ? 'brush-button active' : 'brush-button'}
+          disabled={!usesActiveColor}
+          onClick={() => setColorWheelOpen((open) => !open)}
+        >
+          🎨 Wheel
+        </button>
       </div>
+
+      {colorWheelOpen && engine && (
+        <div className="editor-toolbar">
+          <ColorWheel hex={engine.getActiveColor()} onChange={(hex) => engine.setActiveColor(hex)} />
+        </div>
+      )}
 
       <div className="editor-body">
         {loadState === 'loading' && <div className="editor-loading-overlay">Loading project…</div>}
