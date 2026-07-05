@@ -1,7 +1,34 @@
+// A default import, not `import * as polygonClipping` — the package's ESM build only exports a
+// default (`export { index as default }`), so a namespace import silently resolves to an object
+// with no callable properties in a real ESM/browser build (it only happens to work under
+// vitest/CJS resolution, where wildcard interop copies module.exports' own properties across).
+import polygonClipping from 'polygon-clipping';
+import type { MultiPolygon as PCMultiPolygon } from 'polygon-clipping';
 import { createVectorObject, getObjectsArray, vectorObjectToData } from './document';
 import type { YLayer } from './document';
+import {
+  capsulePolygon,
+  circlePolygon,
+  DEFAULT_CAP_SEGMENTS,
+  ellipseToPolygon,
+  eraserSweepPolygons,
+  fromPCMultiPolygon,
+  multiPolygonArea,
+  polygonArea,
+  rectToPolygon,
+  ringsAsMultiPolygon,
+  toPCPolygon,
+} from './polygon';
+import type { Polygon, Ring } from './polygon';
 import { DEFAULT_TRANSFORM } from './types';
 import type { Point, Transform, VectorObjectData } from './types';
+
+/** Real geometry that could register as "changed" is always well above this; anything smaller is
+ *  floating-point noise from the polygon-clipping sweep, not an actual surviving sliver. */
+const AREA_EPSILON = 1e-3;
+/** Separate from AREA_EPSILON on purpose (see eraseFromObjectData's block comment): this one
+ *  decides "is there anything left to draw," not "did the shape change at all." */
+const DEGENERATE_AREA_EPSILON = 1e-6;
 
 function applyTransform(p: Point, t: Transform): Point {
   const rad = (t.rotation * Math.PI) / 180;
@@ -20,16 +47,6 @@ function distanceToSegment(p: { x: number; y: number }, a: { x: number; y: numbe
   let t = ((p.x - a.x) * dx + (p.y - a.y) * dy) / lengthSq;
   t = Math.max(0, Math.min(1, t));
   return Math.hypot(p.x - (a.x + t * dx), p.y - (a.y + t * dy));
-}
-
-export function distanceToPath(p: { x: number; y: number }, path: { x: number; y: number }[]): number {
-  if (path.length === 0) return Infinity;
-  if (path.length === 1) return Math.hypot(p.x - path[0].x, p.y - path[0].y);
-  let min = Infinity;
-  for (let i = 1; i < path.length; i++) {
-    min = Math.min(min, distanceToSegment(p, path[i - 1], path[i]));
-  }
-  return min;
 }
 
 function segmentsIntersect(
@@ -83,161 +100,190 @@ function minDistanceSegmentToPath(a1: { x: number; y: number }, a2: { x: number;
   return min;
 }
 
-// Rectangle/ellipse geometry, in world space (corners already transform-applied).
-// Only used to decide "did the eraser touch this shape at all" — see the whole-object
-// erase note on eraseFromObjectData for why there's no partial-shape trimming.
-function isPointNearRect(p: { x: number; y: number }, corners: Point[], radius: number): boolean {
-  const minX = Math.min(corners[0].x, corners[1].x) - radius;
-  const maxX = Math.max(corners[0].x, corners[1].x) + radius;
-  const minY = Math.min(corners[0].y, corners[1].y) - radius;
-  const maxY = Math.max(corners[0].y, corners[1].y) + radius;
-  return p.x >= minX && p.x <= maxX && p.y >= minY && p.y <= maxY;
+interface Bounds {
+  minX: number;
+  minY: number;
+  maxX: number;
+  maxY: number;
 }
 
-function isPointNearEllipse(p: { x: number; y: number }, corners: Point[], radius: number): boolean {
-  const cx = (corners[0].x + corners[1].x) / 2;
-  const cy = (corners[0].y + corners[1].y) / 2;
-  const rx = Math.abs(corners[1].x - corners[0].x) / 2 + radius;
-  const ry = Math.abs(corners[1].y - corners[0].y) / 2 + radius;
-  if (rx === 0 || ry === 0) return false;
-  const dx = (p.x - cx) / rx;
-  const dy = (p.y - cy) / ry;
-  return dx * dx + dy * dy <= 1;
-}
-
-// Groups surviving (non-erased) indices into consecutive runs — each run becomes its
-// own stroke fragment, which is how a single erase pass can split one stroke into two.
-export function splitSurvivingRuns(count: number, isErased: (index: number) => boolean): number[][] {
-  const runs: number[][] = [];
-  let current: number[] = [];
-  for (let i = 0; i < count; i++) {
-    if (!isErased(i)) {
-      current.push(i);
-    } else if (current.length > 0) {
-      runs.push(current);
-      current = [];
-    }
+function boundsOf(points: { x: number; y: number }[]): Bounds {
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (const p of points) {
+    if (p.x < minX) minX = p.x;
+    if (p.x > maxX) maxX = p.x;
+    if (p.y < minY) minY = p.y;
+    if (p.y > maxY) maxY = p.y;
   }
-  if (current.length > 0) runs.push(current);
-  return runs;
+  return { minX, minY, maxX, maxY };
 }
 
-// Only subdivides where it might matter — segments nowhere near the eraser stay at
-// their original point count, so this doesn't bloat far-away, untouched geometry.
-function buildWorkingGeometry(
-  points: Point[],
-  widths: number[],
+function padBounds(b: Bounds, pad: number): Bounds {
+  return { minX: b.minX - pad, minY: b.minY - pad, maxX: b.maxX + pad, maxY: b.maxY + pad };
+}
+
+function boundsOverlap(a: Bounds, b: Bounds): boolean {
+  return a.minX <= b.maxX && a.maxX >= b.minX && a.minY <= b.maxY && a.maxY >= b.minY;
+}
+
+type SubtractResult = { kind: 'unchanged' } | { kind: 'deleted' } | { kind: 'changed'; polygons: Polygon[] };
+
+/**
+ * Subtracts the eraser's swept area from `subjectPC` (already resolved to world space) and
+ * classifies the result. `originalArea` must be the subject's *true* (de-duplicated) area — for
+ * shapes/filledPath that's just `polygonArea`, but for a run of overlapping stroke capsules the
+ * caller must derive it from a `union()` first (see eraseStroke), since a naive sum of capsule
+ * areas double-counts the overlap at every joint.
+ */
+function subtractSweep(subjectPC: PCMultiPolygon, originalArea: number, erasePath: { x: number; y: number }[], eraseRadius: number): SubtractResult {
+  const sweepPC = ringsAsMultiPolygon(eraserSweepPolygons(erasePath, eraseRadius));
+  const resultPC = polygonClipping.difference(subjectPC, sweepPC);
+  const resultPolygons = fromPCMultiPolygon(resultPC);
+  const resultArea = multiPolygonArea(resultPolygons);
+
+  if (resultPolygons.length === 0 || resultArea <= DEGENERATE_AREA_EPSILON) return { kind: 'deleted' };
+  if (Math.abs(resultArea - originalArea) <= AREA_EPSILON) return { kind: 'unchanged' };
+  return { kind: 'changed', polygons: resultPolygons };
+}
+
+function filledPathFragment(rings: Ring[], data: VectorObjectData): Omit<VectorObjectData, 'id'> {
+  return {
+    kind: 'filledPath',
+    points: [],
+    rings,
+    style: { color: data.style.color, width: data.style.width, opacity: data.style.opacity },
+    transform: { ...DEFAULT_TRANSFORM },
+    createdBy: data.createdBy,
+  };
+}
+
+function resolveShapeResult(result: SubtractResult, data: VectorObjectData): Omit<VectorObjectData, 'id'>[] | null {
+  if (result.kind === 'unchanged') return null;
+  if (result.kind === 'deleted') return [];
+  return result.polygons.filter((polygon) => polygonArea(polygon) > DEGENERATE_AREA_EPSILON).map((polygon) => filledPathFragment(polygon, data));
+}
+
+function eraseSingleRingObject(
+  ring: Ring,
   erasePath: { x: number; y: number }[],
   eraseRadius: number,
-): { points: Point[]; widths: number[] } {
-  if (points.length < 2) return { points, widths };
+  data: VectorObjectData,
+): Omit<VectorObjectData, 'id'>[] | null {
+  const area = polygonArea([ring]);
+  const result = subtractSweep([toPCPolygon([ring])], area, erasePath, eraseRadius);
+  return resolveShapeResult(result, data);
+}
 
-  // Precision is bounded by this fixed spacing instead of by whatever the original
-  // stroke's point spacing happened to be (which depends on how fast it was drawn —
-  // an invisible factor with no relationship to what the eraser circle shows on
-  // screen). Scales with the eraser radius so a bigger eraser doesn't pay for
-  // needless precision.
-  const maxSpacing = Math.max(1, eraseRadius / 3);
+function eraseStroke(data: VectorObjectData, erasePath: { x: number; y: number }[], eraseRadius: number, expandedPathBounds: Bounds): Omit<VectorObjectData, 'id'>[] | null {
+  const pointsWorld = data.points.map((p) => applyTransform(p, data.transform));
+  const widths = data.points.map((_, i) => data.style.widths?.[i] ?? data.style.width);
 
-  const outPoints: Point[] = [points[0]];
-  const outWidths: number[] = [widths[0]];
-  for (let i = 1; i < points.length; i++) {
-    const a = points[i - 1];
-    const b = points[i];
-    const wa = widths[i - 1];
-    const wb = widths[i];
-    const segLength = Math.hypot(b.x - a.x, b.y - a.y);
-    const mightMatter = minDistanceSegmentToPath(a, b, erasePath) <= eraseRadius + segLength + Math.max(wa, wb) / 2;
+  const maxHalfWidth = Math.max(...widths) / 2;
+  if (!boundsOverlap(padBounds(boundsOf(pointsWorld), maxHalfWidth), expandedPathBounds)) return null;
 
-    if (mightMatter && segLength > maxSpacing) {
-      const steps = Math.ceil(segLength / maxSpacing);
-      for (let s = 1; s <= steps; s++) {
-        const t = s / steps;
-        outPoints.push({ x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t, pressure: a.pressure + (b.pressure - a.pressure) * t });
-        outWidths.push(wa + (wb - wa) * t);
-      }
-    } else {
-      outPoints.push(b);
-      outWidths.push(wb);
-    }
+  if (pointsWorld.length === 1) {
+    const ring = circlePolygon(pointsWorld[0].x, pointsWorld[0].y, widths[0] / 2, DEFAULT_CAP_SEGMENTS * 2);
+    return eraseSingleRingObject(ring, erasePath, eraseRadius, data);
   }
-  return { points: outPoints, widths: outWidths };
+
+  // Classify each segment as a candidate for cutting ("near") or definitely out of reach ("far")
+  // by the *exact* segment-to-erase-path distance (no sampling/subdivision needed here — unlike
+  // the old point-marking approach, the boolean subtraction below is exact regardless of how
+  // coarse the stroke's own point spacing is). Only near segments pay the capsule-conversion
+  // cost; far segments are re-emitted as their original, untouched stroke geometry.
+  const nearSeg: boolean[] = [];
+  for (let i = 1; i < pointsWorld.length; i++) {
+    const a = pointsWorld[i - 1];
+    const b = pointsWorld[i];
+    const halfWidth = Math.max(widths[i - 1], widths[i]) / 2;
+    nearSeg.push(minDistanceSegmentToPath(a, b, erasePath) <= eraseRadius + halfWidth);
+  }
+  if (!nearSeg.some(Boolean)) return null;
+
+  const nearCapsules: Ring[] = [];
+  const farRanges: [number, number][] = [];
+  let cursor = 0;
+  let i = 0;
+  while (i < nearSeg.length) {
+    if (!nearSeg[i]) {
+      i++;
+      continue;
+    }
+    let end = i;
+    while (end + 1 < nearSeg.length && nearSeg[end + 1]) end++;
+    if (i > cursor) farRanges.push([cursor, i]);
+    for (let s = i; s <= end; s++) {
+      const radius = (widths[s] + widths[s + 1]) / 4;
+      nearCapsules.push(capsulePolygon(pointsWorld[s], pointsWorld[s + 1], radius, DEFAULT_CAP_SEGMENTS));
+    }
+    cursor = end + 1;
+    i = end + 1;
+  }
+  if (cursor < pointsWorld.length - 1) farRanges.push([cursor, pointsWorld.length - 1]);
+
+  const subjectPC = ringsAsMultiPolygon(nearCapsules);
+  const unionedPC = polygonClipping.union(subjectPC);
+  const originalArea = multiPolygonArea(fromPCMultiPolygon(unionedPC));
+  const result = subtractSweep(subjectPC, originalArea, erasePath, eraseRadius);
+  if (result.kind === 'unchanged') return null;
+
+  const farFragments: Omit<VectorObjectData, 'id'>[] = farRanges
+    .filter(([s, e]) => e > s)
+    .map(([s, e]) => ({
+      kind: 'stroke' as const,
+      points: pointsWorld.slice(s, e + 1),
+      style: { color: data.style.color, width: data.style.width, widths: widths.slice(s, e + 1), opacity: data.style.opacity },
+      transform: { ...DEFAULT_TRANSFORM },
+      createdBy: data.createdBy,
+    }));
+
+  if (result.kind === 'deleted') return farFragments;
+
+  const nearFragments = result.polygons.filter((polygon) => polygonArea(polygon) > DEGENERATE_AREA_EPSILON).map((polygon) => filledPathFragment(polygon, data));
+  return [...farFragments, ...nearFragments];
+}
+
+function eraseFilledShape(data: VectorObjectData, erasePath: { x: number; y: number }[], eraseRadius: number, expandedPathBounds: Bounds): Omit<VectorObjectData, 'id'>[] | null {
+  let ringsWorld: Ring[];
+  if (data.kind === 'rectangle') {
+    ringsWorld = [rectToPolygon(data.points).map((p) => applyTransform(p, data.transform))];
+  } else if (data.kind === 'ellipse') {
+    ringsWorld = [ellipseToPolygon(data.points).map((p) => applyTransform(p, data.transform))];
+  } else {
+    ringsWorld = (data.rings ?? []).map((ring) => ring.map((p) => applyTransform(p, data.transform)));
+  }
+  if (ringsWorld.length === 0 || ringsWorld[0].length === 0) return null;
+
+  if (!boundsOverlap(boundsOf(ringsWorld.flat()), expandedPathBounds)) return null;
+
+  const originalArea = polygonArea(ringsWorld);
+  const result = subtractSweep([toPCPolygon(ringsWorld)], originalArea, erasePath, eraseRadius);
+  return resolveShapeResult(result, data);
 }
 
 /**
- * Returns the stroke fragments that survive erasing, with the object's transform
- * baked into their point coordinates (fragments always use an identity transform).
- * Returns `null` if the eraser path didn't touch this object at all — callers use
- * that to skip replacing objects the eraser missed.
+ * Returns the fragments that survive erasing `data` with a swept eraser of `eraseRadius` along
+ * `erasePath` (world-space throughout — the object's own transform is baked into world coordinates
+ * here and reset to identity on any surviving fragment, same convention regardless of kind).
+ *
+ * Returns `null` when nothing actually changed (including a bbox/near-segment miss) — callers rely
+ * on this to skip replacing objects the eraser didn't really touch, which matters because a
+ * replace assigns new ids and would otherwise silently break identity-based tracking (e.g. a
+ * currently-selected object) for objects the eraser only grazed without truly touching.
+ *
+ * "Nothing survives" (full deletion) and "nothing changed" (no-op) are deliberately distinguished
+ * by two different epsilons (DEGENERATE_AREA_EPSILON vs AREA_EPSILON) — conflating them would risk
+ * silently no-op'ing a heavy, mostly-complete erase, or spuriously replacing an untouched object.
  */
-export function eraseFromObjectData(
-  data: VectorObjectData,
-  erasePath: { x: number; y: number }[],
-  eraseRadius: number,
-): Omit<VectorObjectData, 'id'>[] | null {
-  // Rectangles/ellipses are filled shapes stored as 2 bounding-box corners, not a
-  // polyline — the segment-subdivision/per-point-width logic below assumes stroke
-  // topology and would silently mangle a shape into stroke fragments along its
-  // diagonal if it ran against one. Partial-erase of a filled shape has no
-  // well-defined geometry without real boolean subtraction (same class of gap as the
-  // documented thick-stroke partial-width limitation), so a touch just deletes the
-  // whole object instead.
-  if (data.kind !== 'stroke') {
-    const worldCorners = data.points.map((p) => applyTransform(p, data.transform));
-    if (worldCorners.length < 2) return null;
-    const touched = erasePath.some((p) =>
-      data.kind === 'rectangle' ? isPointNearRect(p, worldCorners, eraseRadius) : isPointNearEllipse(p, worldCorners, eraseRadius),
-    );
-    return touched ? [] : null;
-  }
+export function eraseFromObjectData(data: VectorObjectData, erasePath: { x: number; y: number }[], eraseRadius: number): Omit<VectorObjectData, 'id'>[] | null {
+  if (erasePath.length === 0) return null;
+  const expandedPathBounds = padBounds(boundsOf(erasePath), eraseRadius);
 
-  const rawWorldPoints = data.points.map((p) => applyTransform(p, data.transform));
-  const rawWidths = data.points.map((_, i) => data.style.widths?.[i] ?? data.style.width);
-
-  // Test the stroke's own rendered *segments* against the eraser path, not just its
-  // sample points — otherwise a fast/coarse stroke with widely-spaced points can be
-  // visually crossed by the eraser without either endpoint being close enough to
-  // register.
-  const { points: worldPoints, widths } = buildWorkingGeometry(rawWorldPoints, rawWidths, erasePath, eraseRadius);
-
-  // The test is widened by the stroke's own half-width, because the eraser should
-  // remove ink wherever it visually touches it — a thick stroke's rendered edge
-  // extends past its centerline, same as a real eraser doesn't care about a pen's
-  // "center", only where its tip actually contacts the page. Precision doesn't
-  // suffer from this the way it used to: erase granularity is now bounded by
-  // buildWorkingGeometry's fixed subdivision, not by the stroke's original point
-  // spacing, so this stays predictable instead of ballooning unpredictably.
-  const erased = new Array<boolean>(worldPoints.length).fill(false);
-  if (worldPoints.length === 1) {
-    const effectiveRadius = eraseRadius + widths[0] / 2;
-    if (distanceToPath(worldPoints[0], erasePath) <= effectiveRadius) erased[0] = true;
-  } else {
-    for (let i = 1; i < worldPoints.length; i++) {
-      const effectiveRadius = eraseRadius + (widths[i - 1] + widths[i]) / 4;
-      if (minDistanceSegmentToPath(worldPoints[i - 1], worldPoints[i], erasePath) <= effectiveRadius) {
-        erased[i - 1] = true;
-        erased[i] = true;
-      }
-    }
-  }
-
-  const isErased = (i: number) => erased[i];
-  const runs = splitSurvivingRuns(worldPoints.length, isErased);
-  const survivingCount = runs.reduce((sum, r) => sum + r.length, 0);
-  if (survivingCount === worldPoints.length) return null;
-
-  return runs.map((run) => ({
-    kind: 'stroke' as const,
-    points: run.map((i) => worldPoints[i]),
-    style: {
-      color: data.style.color,
-      width: data.style.width,
-      widths: run.map((i) => widths[i]),
-      opacity: data.style.opacity,
-    },
-    transform: { ...DEFAULT_TRANSFORM },
-    createdBy: data.createdBy,
-  }));
+  if (data.kind === 'stroke') return eraseStroke(data, erasePath, eraseRadius, expandedPathBounds);
+  return eraseFilledShape(data, erasePath, eraseRadius, expandedPathBounds);
 }
 
 export function eraseFromLayer(layer: YLayer, erasePath: { x: number; y: number }[], eraseRadius: number): void {
@@ -248,7 +294,7 @@ export function eraseFromLayer(layer: YLayer, erasePath: { x: number; y: number 
     if (fragments === null) continue;
 
     objects.delete(i, 1);
-    const survivors = fragments.filter((f) => f.points.length > 0).map((f) => createVectorObject(f));
+    const survivors = fragments.filter((f) => f.points.length > 0 || (f.rings?.length ?? 0) > 0).map((f) => createVectorObject(f));
     if (survivors.length > 0) objects.insert(i, survivors);
   }
 }

@@ -27,7 +27,7 @@ import {
 import type { YFrame, YObject } from './document';
 import { attachPointerCapture } from './input';
 import type { PointerModifiers } from './input';
-import { hitTestFrame } from './geometry';
+import { getObjectBoundsPoints, hitTestFrame } from './geometry';
 import { paintEraserCursor, paintEllipse, paintFrameLayers, paintRect, paintSelectionOutline, paintStroke, renderFrame, renderOnionSkin } from './render';
 import { createUndoManager } from './history';
 import { exportSnapshot as encodeSnapshot } from './serialize';
@@ -324,7 +324,7 @@ export class DrawingEngine {
       const obj = this.findObjectById(this.selectedObjectId);
       if (obj) {
         const data = vectorObjectToData(obj);
-        paintSelectionOutline(this.ctx, data.points, data.transform);
+        paintSelectionOutline(this.ctx, getObjectBoundsPoints(data), data.transform);
       }
     }
     if (this.activeTool === 'eraser' && this.hoverPoint) {
