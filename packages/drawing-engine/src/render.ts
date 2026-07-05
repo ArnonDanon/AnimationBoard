@@ -47,11 +47,26 @@ export function buildFilledPathPath(rings: Point[][]): Path2D {
   return path;
 }
 
-export function withObjectTransform(ctx: CanvasRenderingContext2D, transform: Transform, fn: () => void): void {
+/** Center of an object's own geometry — the pivot rotation/scale should spin around, as
+ *  opposed to `transform.x/y` (a plain translation offset, not a pivot point). */
+export function getTransformPivot(points: Point[]): { x: number; y: number } {
+  if (points.length === 0) return { x: 0, y: 0 };
+  const box = getBoundingBox(points);
+  return { x: (box.minX + box.maxX) / 2, y: (box.minY + box.maxY) / 2 };
+}
+
+export function withObjectTransform(
+  ctx: CanvasRenderingContext2D,
+  transform: Transform,
+  pivot: { x: number; y: number },
+  fn: () => void,
+): void {
   ctx.save();
   ctx.translate(transform.x, transform.y);
+  ctx.translate(pivot.x, pivot.y);
   ctx.rotate((transform.rotation * Math.PI) / 180);
   ctx.scale(transform.scaleX, transform.scaleY);
+  ctx.translate(-pivot.x, -pivot.y);
   fn();
   ctx.restore();
 }
@@ -62,7 +77,7 @@ function isUniformWidth(style: Style, pointCount: number): boolean {
 }
 
 function paintDot(ctx: CanvasRenderingContext2D, point: Point, radius: number, style: Style, transform: Transform): void {
-  withObjectTransform(ctx, transform, () => {
+  withObjectTransform(ctx, transform, getTransformPivot([point]), () => {
     ctx.fillStyle = style.color;
     ctx.globalAlpha = style.opacity;
     ctx.beginPath();
@@ -76,7 +91,7 @@ function paintDot(ctx: CanvasRenderingContext2D, point: Point, radius: number, s
 // far cheaper than segment-by-segment stroking for anything beyond a handful of points.
 function paintUniformStroke(ctx: CanvasRenderingContext2D, points: Point[], width: number, style: Style, transform: Transform): void {
   const path = buildStrokePath(points);
-  withObjectTransform(ctx, transform, () => {
+  withObjectTransform(ctx, transform, getTransformPivot(points), () => {
     ctx.strokeStyle = style.color;
     ctx.lineWidth = width;
     ctx.globalAlpha = style.opacity;
@@ -87,7 +102,7 @@ function paintUniformStroke(ctx: CanvasRenderingContext2D, points: Point[], widt
 }
 
 function paintVariableWidthSegments(ctx: CanvasRenderingContext2D, points: Point[], widths: number[], style: Style, transform: Transform): void {
-  withObjectTransform(ctx, transform, () => {
+  withObjectTransform(ctx, transform, getTransformPivot(points), () => {
     ctx.strokeStyle = style.color;
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
@@ -174,7 +189,7 @@ export function paintStroke(ctx: CanvasRenderingContext2D, points: Point[], styl
 // features rather than building them speculatively.
 export function paintRect(ctx: CanvasRenderingContext2D, points: Point[], style: Style, transform: Transform): void {
   if (points.length < 2) return;
-  withObjectTransform(ctx, transform, () => {
+  withObjectTransform(ctx, transform, getTransformPivot(points), () => {
     ctx.fillStyle = style.color;
     ctx.globalAlpha = style.opacity;
     ctx.fill(buildRectPath(points));
@@ -183,7 +198,7 @@ export function paintRect(ctx: CanvasRenderingContext2D, points: Point[], style:
 
 export function paintEllipse(ctx: CanvasRenderingContext2D, points: Point[], style: Style, transform: Transform): void {
   if (points.length < 2) return;
-  withObjectTransform(ctx, transform, () => {
+  withObjectTransform(ctx, transform, getTransformPivot(points), () => {
     ctx.fillStyle = style.color;
     ctx.globalAlpha = style.opacity;
     ctx.fill(buildEllipsePath(points));
@@ -193,7 +208,7 @@ export function paintEllipse(ctx: CanvasRenderingContext2D, points: Point[], sty
 /** Erase results — one or more filled polygons (each possibly with holes) baked into world space. */
 export function paintFilledPath(ctx: CanvasRenderingContext2D, rings: Point[][], style: Style, transform: Transform): void {
   if (rings.length === 0) return;
-  withObjectTransform(ctx, transform, () => {
+  withObjectTransform(ctx, transform, getTransformPivot(rings.flat()), () => {
     ctx.fillStyle = style.color;
     ctx.globalAlpha = style.opacity;
     ctx.fill(buildFilledPathPath(rings), 'evenodd');
@@ -236,7 +251,7 @@ export function getBoundingBox(points: Point[]): { minX: number; minY: number; m
 
 export function paintSelectionOutline(ctx: CanvasRenderingContext2D, points: Point[], transform: Transform): void {
   const box = getBoundingBox(points);
-  withObjectTransform(ctx, transform, () => {
+  withObjectTransform(ctx, transform, getTransformPivot(points), () => {
     ctx.save();
     ctx.strokeStyle = '#3355dd';
     ctx.setLineDash([4, 4]);
