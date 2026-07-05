@@ -286,7 +286,7 @@ export function eraseFromObjectData(data: VectorObjectData, erasePath: { x: numb
   return eraseFilledShape(data, erasePath, eraseRadius, expandedPathBounds);
 }
 
-export function eraseFromLayer(layer: YLayer, erasePath: { x: number; y: number }[], eraseRadius: number): void {
+function eraseObjectsInPlace(layer: YLayer, erasePath: { x: number; y: number }[], eraseRadius: number): void {
   const objects = getObjectsArray(layer);
   for (let i = objects.length - 1; i >= 0; i--) {
     const data = vectorObjectToData(objects.get(i));
@@ -296,5 +296,23 @@ export function eraseFromLayer(layer: YLayer, erasePath: { x: number; y: number 
     objects.delete(i, 1);
     const survivors = fragments.filter((f) => f.points.length > 0 || (f.rings?.length ?? 0) > 0).map((f) => createVectorObject(f));
     if (survivors.length > 0) objects.insert(i, survivors);
+  }
+}
+
+/**
+ * A single erase pass can touch many stacked/overlapping objects at once (a dense scribble of
+ * many strokes on top of each other, all under the same eraser dab). Each touched object's
+ * delete+insert is its own Yjs mutation; without batching, every one of those fires its own
+ * 'update' event — and engine.ts's `doc.on('update', () => this.notify())` does a full
+ * synchronous re-render per event. With N touched objects that's up to 2N full-canvas repaints
+ * for what should visually be a single erase step, which is what made erasing over many
+ * overlapping strokes feel slow and jaggy. Wrapping the whole pass in one transaction collapses
+ * it to exactly one 'update' (and one repaint), regardless of how many objects it touches.
+ */
+export function eraseFromLayer(layer: YLayer, erasePath: { x: number; y: number }[], eraseRadius: number): void {
+  if (layer.doc) {
+    layer.doc.transact(() => eraseObjectsInPlace(layer, erasePath, eraseRadius));
+  } else {
+    eraseObjectsInPlace(layer, erasePath, eraseRadius);
   }
 }

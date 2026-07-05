@@ -385,4 +385,46 @@ describe('eraseFromLayer — perf smoke test', () => {
     const elapsedMs = performance.now() - start;
     expect(elapsedMs).toBeLessThan(200);
   });
+
+  it('touching many overlapping strokes at once fires exactly one doc update, not one per touched object', () => {
+    // Regression guard: eraseFromLayer used to mutate each touched object's delete+insert as its
+    // own untransacted Yjs edit, so N overlapping objects under one dab fired ~2N 'update' events
+    // — each triggering a full synchronous re-render in engine.ts — turning a single erase step
+    // into dozens of redundant repaints and making dense, stacked strokes feel slow and jaggy.
+    const doc = createDocument();
+    const layer = getLayersArray(getFramesArray(doc).get(0)).get(0);
+    const objects = getObjectsArray(layer);
+    for (let i = 0; i < 40; i++) {
+      const y = 100 + (i % 3);
+      objects.push([createVectorObject(makeStroke([{ x: 100, y }, { x: 300, y }, { x: 500, y }], 18))]);
+    }
+
+    let updateCount = 0;
+    doc.on('update', () => updateCount++);
+    eraseFromLayer(layer, [{ x: 90, y: 100 }, { x: 510, y: 100 }], 20);
+
+    expect(updateCount).toBe(1);
+  });
+
+  it('stays fast across many overlapping strokes under one eraser dab', () => {
+    const doc = createDocument();
+    const layer = getLayersArray(getFramesArray(doc).get(0)).get(0);
+    const objects = getObjectsArray(layer);
+    for (let i = 0; i < 40; i++) {
+      const y = 100 + (i % 3);
+      objects.push([createVectorObject(makeStroke([{ x: 100, y }, { x: 300, y }, { x: 500, y }], 18))]);
+    }
+
+    const ticks = [
+      [{ x: 90, y: 95 }, { x: 150, y: 100 }],
+      [{ x: 150, y: 100 }, { x: 250, y: 105 }],
+      [{ x: 250, y: 105 }, { x: 350, y: 100 }],
+      [{ x: 350, y: 100 }, { x: 450, y: 95 }],
+      [{ x: 450, y: 95 }, { x: 510, y: 100 }],
+    ];
+    const start = performance.now();
+    for (const path of ticks) eraseFromLayer(layer, path, 20);
+    const elapsedMs = performance.now() - start;
+    expect(elapsedMs / ticks.length).toBeLessThan(50); // generous ceiling — catching a gross regression, not micro-benchmarking
+  });
 });
