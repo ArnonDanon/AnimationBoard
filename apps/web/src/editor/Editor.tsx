@@ -4,6 +4,7 @@ import type { DrawingEngine, RealtimeProvider } from '@animationboard/drawing-en
 import { getIdToken, getProject, loadDocument, saveDocument } from '../api/client'
 import { ColorWheel } from './ColorWheel'
 import { LayerPanel } from './LayerPanel'
+import { PaletteSwitcher } from './PaletteSwitcher'
 import { Timeline } from './Timeline'
 import './Editor.css'
 
@@ -275,6 +276,8 @@ export function Editor({ animatorId, projectId, onBack }: EditorProps) {
           🎨 Wheel
         </button>
       </div>
+
+      <PaletteSwitcher engine={engine} usesActiveColor={usesActiveColor} />
 
       {colorWheelOpen && engine && (
         <div className="editor-toolbar">

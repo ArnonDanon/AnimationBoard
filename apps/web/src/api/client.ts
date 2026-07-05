@@ -24,6 +24,15 @@ export interface ProjectDetail extends ProjectSummary {
   members: ProjectMember[]
 }
 
+export interface PaletteSummary {
+  paletteId: string
+  ownerId: string
+  name: string
+  colors: string[]
+  createdAt: string
+  updatedAt: string
+}
+
 export async function getIdToken(): Promise<string | undefined> {
   const session = await fetchAuthSession()
   return session.tokens?.idToken?.toString()
@@ -66,6 +75,22 @@ export function shareProject(projectId: string, email: string): Promise<{ ok: tr
 
 export function revokeMember(projectId: string, animatorId: string): Promise<{ ok: true }> {
   return request(`/projects/${projectId}/members/${animatorId}`, { method: 'DELETE' })
+}
+
+export function listPalettes(): Promise<{ palettes: PaletteSummary[] }> {
+  return request('/palettes')
+}
+
+export function createPalette(name: string, colors: string[] = []): Promise<PaletteSummary> {
+  return request('/palettes', { method: 'POST', body: JSON.stringify({ name, colors }) })
+}
+
+export function updatePalette(paletteId: string, patch: { name?: string; colors?: string[] }): Promise<{ ok: true }> {
+  return request(`/palettes/${paletteId}`, { method: 'PATCH', body: JSON.stringify(patch) })
+}
+
+export function deletePalette(paletteId: string): Promise<{ ok: true }> {
+  return request(`/palettes/${paletteId}`, { method: 'DELETE' })
 }
 
 export async function loadDocument(projectId: string): Promise<Uint8Array> {
