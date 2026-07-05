@@ -15,6 +15,11 @@ export interface Style {
 
 export type PressureAffects = 'width' | 'opacity' | 'both';
 
+/** 'pressure' = width driven by resolvePointWidth (pen pressure). 'directional' = width
+ *  driven by stroke angle and speed instead (see resolveDirectionalWidths), for
+ *  nib-style brushes like the Mapping Pen that vary width without pressure input. */
+export type WidthSource = 'pressure' | 'directional';
+
 export interface Brush {
   id: string;
   /** null = built-in/system brush, per the Personal Library context's ownership model. */
@@ -25,6 +30,7 @@ export interface Brush {
   opacity: number;
   pressureSensitive: boolean;
   pressureAffects: PressureAffects;
+  widthSource: WidthSource;
 }
 
 export interface Transform {
