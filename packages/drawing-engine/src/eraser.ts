@@ -30,6 +30,18 @@ const AREA_EPSILON = 1e-3;
  *  decides "is there anything left to draw," not "did the shape change at all." */
 const DEGENERATE_AREA_EPSILON = 1e-6;
 
+/**
+ * Safety valve for expandNearForFragmentedSelfOverlap: merging N mutually-overlapping
+ * segments into one union+subtract is correct but not free — polygon-clipping's union
+ * scales worse than linearly with the number of overlapping inputs in one call
+ * (measured empirically: ~20ms at 20 capsules, ~140ms at 100, ~3.8s at 400). A densely
+ * "filled in" scribble can genuinely have hundreds of self-overlapping segments in one
+ * connected component. Past this cap, skip merging that specific component so erasing
+ * stays responsive — accepting that a component this large may still show the
+ * double-composited-opacity artifact this function otherwise fixes.
+ */
+const MAX_SELF_OVERLAP_MERGE_SIZE = 80;
+
 function applyTransform(p: Point, t: Transform): Point {
   const rad = (t.rotation * Math.PI) / 180;
   const sx = p.x * t.scaleX;
@@ -129,6 +141,83 @@ function boundsOverlap(a: Bounds, b: Bounds): boolean {
   return a.minX <= b.maxX && a.maxX >= b.minX && a.minY <= b.maxY && a.maxY >= b.minY;
 }
 
+function findRoot(parent: number[], x: number): number {
+  while (parent[x] !== x) {
+    parent[x] = parent[parent[x]]; // path halving
+    x = parent[x];
+  }
+  return x;
+}
+
+function union(parent: number[], a: number, b: number): void {
+  const ra = findRoot(parent, a);
+  const rb = findRoot(parent, b);
+  if (ra !== rb) parent[ra] = rb;
+}
+
+/**
+ * A stroke can cross back over itself (e.g. scribbling back and forth to fill in a
+ * shape) — before erasing, that self-overlap is safe, since it's one object painted
+ * once. Splitting by *sequence* position doesn't respect that: two segments far apart
+ * in the point sequence but physically coincident can end up in two different
+ * fragments, each becoming its own independent object that still occupies the same
+ * physical space — silently doubling (or worse) that ink's opacity, and not
+ * necessarily anywhere near where the erase actually happened (reported as scribbled
+ * ink darkening dramatically after erasing elsewhere on the same stroke).
+ *
+ * This can happen two ways: (a) a segment the erase directly touches turns out to be
+ * spatially coincident with an untouched segment elsewhere in the sequence, or (b) two
+ * segments that are *both* untouched by the erase still end up split into two separate
+ * far-fragments, because some unrelated touched region falls between them in the
+ * sequence. Either way, the fix is the same: find connected components under "these
+ * two segments' own ink physically coincides" (skipping immediate sequence neighbors,
+ * which always trivially touch at their shared endpoint — that's normal continuation,
+ * not a crossing), and for any component that would otherwise end up fragmented — it's
+ * directly touched, or its members aren't already sequence-contiguous — mark every
+ * member near, so they're all folded into the same union+subtract instead of ending up
+ * as separate, spatially-overlapping objects.
+ *
+ * A plain *bounding-box* version of the "physically coincides" test over-triggers on an
+ * ordinary straight or gently-curved stroke: any two segments some distance apart along
+ * the same line still have overlapping padded bboxes (they're collinear), even though
+ * neither one's ink actually revisits the other's space — so this uses the same exact
+ * segment-to-segment distance test the initial near/far classification already relies
+ * on (`distanceSegmentToSegment`), which correctly reports a real gap between two
+ * segments that just happen to continue the same path.
+ */
+function expandNearForFragmentedSelfOverlap(nearSeg: boolean[], pointsWorld: Point[], widths: number[], segBounds: Bounds[]): void {
+  const n = nearSeg.length;
+  const parent = Array.from({ length: n }, (_, i) => i);
+
+  for (let i = 0; i < n; i++) {
+    for (let j = i + 2; j < n; j++) {
+      if (!boundsOverlap(segBounds[i], segBounds[j])) continue; // cheap pre-filter
+      const halfWidth = Math.max(widths[i], widths[i + 1], widths[j], widths[j + 1]) / 2;
+      if (distanceSegmentToSegment(pointsWorld[i], pointsWorld[i + 1], pointsWorld[j], pointsWorld[j + 1]) <= halfWidth) {
+        union(parent, i, j);
+      }
+    }
+  }
+
+  const components = new Map<number, number[]>();
+  for (let i = 0; i < n; i++) {
+    const root = findRoot(parent, i);
+    const members = components.get(root);
+    if (members) members.push(i);
+    else components.set(root, [i]);
+  }
+
+  for (const members of components.values()) {
+    if (members.length === 1) continue; // no self-overlap partner, nothing to reconsider
+    if (members.length > MAX_SELF_OVERLAP_MERGE_SIZE) continue; // see the constant's comment
+    const touchedDirectly = members.some((m) => nearSeg[m]);
+    const isContiguous = members.every((m, k) => k === 0 || m === members[k - 1] + 1);
+    if (touchedDirectly || !isContiguous) {
+      for (const m of members) nearSeg[m] = true;
+    }
+  }
+}
+
 type SubtractResult = { kind: 'unchanged' } | { kind: 'deleted' } | { kind: 'changed'; polygons: Polygon[] };
 
 /**
@@ -195,13 +284,20 @@ function eraseStroke(data: VectorObjectData, erasePath: { x: number; y: number }
   // coarse the stroke's own point spacing is). Only near segments pay the capsule-conversion
   // cost; far segments are re-emitted as their original, untouched stroke geometry.
   const nearSeg: boolean[] = [];
+  const segBounds: Bounds[] = [];
   for (let i = 1; i < pointsWorld.length; i++) {
     const a = pointsWorld[i - 1];
     const b = pointsWorld[i];
     const halfWidth = Math.max(widths[i - 1], widths[i]) / 2;
     nearSeg.push(minDistanceSegmentToPath(a, b, erasePath) <= eraseRadius + halfWidth);
+    segBounds.push(padBounds(boundsOf([a, b]), halfWidth));
   }
   if (!nearSeg.some(Boolean)) return null;
+
+  // See expandNearForFragmentedSelfOverlap's comment — this is the fix for
+  // self-crossing strokes fragmenting into spatially-overlapping (and thus
+  // double-composited) pieces when erased anywhere along their length.
+  expandNearForFragmentedSelfOverlap(nearSeg, pointsWorld, widths, segBounds);
 
   // `data` may itself already be a fragment from a previous (partial) erase pass — e.g. the
   // eraser is dragged in several small steps, each re-processing whatever the previous step left
