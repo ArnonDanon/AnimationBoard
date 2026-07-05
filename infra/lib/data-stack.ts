@@ -7,6 +7,7 @@ export class DataStack extends cdk.Stack {
   public readonly projectsTable: dynamodb.Table;
   public readonly membersTable: dynamodb.Table;
   public readonly connectionsTable: dynamodb.Table;
+  public readonly palettesTable: dynamodb.Table;
   public readonly documentsBucket: s3.Bucket;
 
   constructor(scope: Construct, id: string, props?: cdk.StackProps) {
@@ -55,6 +56,22 @@ export class DataStack extends cdk.Stack {
       indexName: 'byAnimator',
       partitionKey: { name: 'animatorId', type: dynamodb.AttributeType.STRING },
       sortKey: { name: 'projectId', type: dynamodb.AttributeType.STRING },
+    });
+
+    // Personal Library context (docs/01-domain-model.md): `Palette { id, ownerId, colors }`,
+    // always owner-scoped — no sharing/collaboration concept, unlike Projects. The
+    // built-in palette (`ownerId: null`) stays the hardcoded BUILT_IN_PALETTE constant
+    // in packages/drawing-engine, not a row here.
+    this.palettesTable = new dynamodb.Table(this, 'PalettesTable', {
+      partitionKey: { name: 'paletteId', type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+    });
+    // "List my palettes" without a scan — mirrors ProjectMembersTable's byAnimator GSI.
+    this.palettesTable.addGlobalSecondaryIndex({
+      indexName: 'byOwner',
+      partitionKey: { name: 'ownerId', type: dynamodb.AttributeType.STRING },
+      sortKey: { name: 'paletteId', type: dynamodb.AttributeType.STRING },
     });
 
     this.documentsBucket = new s3.Bucket(this, 'DocumentsBucket', {

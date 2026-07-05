@@ -17,5 +17,6 @@ new ApiStack(app, 'AnimationBoardApiStack', {
   projectsTable: data.projectsTable,
   membersTable: data.membersTable,
   connectionsTable: data.connectionsTable,
+  palettesTable: data.palettesTable,
   documentsBucket: data.documentsBucket,
 });
