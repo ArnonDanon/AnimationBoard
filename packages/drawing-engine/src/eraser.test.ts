@@ -79,6 +79,14 @@ function isCovered(fragments: Omit<VectorObjectData, 'id'>[], x: number, y: numb
   return fragments.some((f) => (f.kind === 'filledPath' ? pointInRings(f.rings ?? [], x, y) : pointNearStroke(f, x, y)));
 }
 
+/** How many *separate* fragments cover (x, y) — should never exceed 1 for ink that was
+ *  never actually erased there, regardless of how the stroke self-crosses or how the
+ *  eraser happened to split it elsewhere. More than 1 means that spot is being painted
+ *  by two independent objects, silently darkening it under opacity < 1. */
+function coveringFragmentCount(fragments: Omit<VectorObjectData, 'id'>[], x: number, y: number): number {
+  return fragments.filter((f) => (f.kind === 'filledPath' ? pointInRings(f.rings ?? [], x, y) : pointNearStroke(f, x, y))).length;
+}
+
 describe('eraseFromObjectData — stroke', () => {
   it('returns null when the eraser path misses the stroke entirely', () => {
     const stroke = makeStroke([{ x: 0, y: 0 }, { x: 10, y: 0 }]);
@@ -215,6 +223,65 @@ describe('eraseFromObjectData — stroke', () => {
         expect(fragment.style.capStart).toBe(false); // must still be false, not reset to true
       }
     }
+  });
+
+  it('merges two untouched, sequence-distant self-overlapping segments instead of leaving them as separate double-covering fragments (regression: a scribbled shape that crosses back over itself darkened dramatically after erasing elsewhere on the same stroke)', () => {
+    // A loop that re-traces its own first edge far later in the point sequence — the
+    // erase touches only the middle of the loop, nowhere near either copy of that edge.
+    // Segment 0 (points 0-1) and segment 5 (points 5-6) are the *same* physical edge,
+    // but an untouched-vs-touched split between them (at segment 2) would otherwise put
+    // them in two different far-fragments, each independently re-drawing that edge.
+    const stroke = makeStroke([
+      { x: 0, y: 0 }, { x: 50, y: 0 }, // edge, copy 1 (segment 0)
+      { x: 50, y: 50 }, { x: 25, y: 25 }, { x: 0, y: 50 }, // unrelated loop detail (segments 1-3)
+      { x: 0, y: 0 }, { x: 50, y: 0 }, // back to origin and re-trace the same edge (segments 4, 5)
+    ], 2);
+
+    // Erase only in the middle of the loop detail (segment 2: (50,50)-(25,25)), well
+    // away from either copy of the edge at y=0.
+    const result = eraseFromObjectData(stroke, [{ x: 37.5, y: 37.5 }], 3)!;
+    expect(result).not.toBeNull();
+
+    // Well within the edge, away from its shared endpoints with the rest of the loop —
+    // must be covered by exactly one fragment's worth of ink, not two independent copies.
+    expect(coveringFragmentCount(result, 10, 0)).toBe(1);
+    expect(coveringFragmentCount(result, 40, 0)).toBe(1);
+    // The actually-erased spot is gone, and the rest of the loop survives normally.
+    expect(isCovered(result, 37.5, 37.5)).toBe(false);
+    expect(isCovered(result, 0, 50)).toBe(true);
+  });
+
+  it('the self-overlap merge cap keeps a densely self-crossing stroke fast, even though its whole self-overlap component is far larger than what the eraser directly touched', () => {
+    // Mimic a real scribbled-in shape (e.g. shading in a ball): many short segments
+    // densely covering a small disc, almost all of them within combined half-width of
+    // several others -- forming one large self-overlap connected component. A tiny
+    // eraser dab only directly touches a couple of segments right at its center; the
+    // rest of the (300+ segment) component is spatially coincident with those but
+    // untouched. Without MAX_SELF_OVERLAP_MERGE_SIZE, expandNearForFragmentedSelfOverlap
+    // would correctly-but-expensively fold the *entire* component into one union+
+    // subtract (polygon-clipping's union scales worse than linearly with overlapping
+    // input count — seconds, not milliseconds, for a component this size). The cap
+    // keeps this fast by leaving an oversized component's untouched members alone,
+    // at the cost of not fully fixing the double-composited-opacity artifact for
+    // components past the cap (see MAX_SELF_OVERLAP_MERGE_SIZE's comment).
+    const points: { x: number; y: number }[] = [];
+    for (let k = 0; k < 400; k++) {
+      const angle = k * 2.4; // irrational-ish step so it densely covers the disc
+      const radius = 20 + 10 * Math.sin(k * 0.3);
+      points.push({ x: 100 + radius * Math.cos(angle), y: 100 + radius * Math.sin(angle) });
+    }
+    const stroke = makeStroke(points, 3);
+
+    // A small eraseRadius keeps *direct* erase-path proximity narrow (only whichever
+    // segments happen to pass within a couple px of this exact point, which sits
+    // right on the very first point of the spiral), so this specifically exercises
+    // the self-overlap cap rather than just a large direct touch.
+    const start = performance.now();
+    const result = eraseFromObjectData(stroke, [{ x: 120, y: 100 }], 2);
+    const elapsedMs = performance.now() - start;
+
+    expect(result).not.toBeNull();
+    expect(elapsedMs).toBeLessThan(300); // the cap should keep this well under polygon-clipping's blowup range
   });
 
   it('carries per-point widths into untouched far-run stroke fragments with matching lengths', () => {
