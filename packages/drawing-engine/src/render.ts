@@ -34,6 +34,19 @@ export function buildEllipsePath(points: Point[]): Path2D {
   return path;
 }
 
+/** `rings` is [outer, ...holes] per polygon, one or more polygons flattened into one Path2D —
+ *  callers use the 'evenodd' fill rule so hole-vs-outer winding direction never has to be tracked. */
+export function buildFilledPathPath(rings: Point[][]): Path2D {
+  const path = new Path2D();
+  for (const ring of rings) {
+    if (ring.length === 0) continue;
+    path.moveTo(ring[0].x, ring[0].y);
+    for (let i = 1; i < ring.length; i++) path.lineTo(ring[i].x, ring[i].y);
+    path.closePath();
+  }
+  return path;
+}
+
 export function withObjectTransform(ctx: CanvasRenderingContext2D, transform: Transform, fn: () => void): void {
   ctx.save();
   ctx.translate(transform.x, transform.y);
@@ -177,6 +190,16 @@ export function paintEllipse(ctx: CanvasRenderingContext2D, points: Point[], sty
   });
 }
 
+/** Erase results — one or more filled polygons (each possibly with holes) baked into world space. */
+export function paintFilledPath(ctx: CanvasRenderingContext2D, rings: Point[][], style: Style, transform: Transform): void {
+  if (rings.length === 0) return;
+  withObjectTransform(ctx, transform, () => {
+    ctx.fillStyle = style.color;
+    ctx.globalAlpha = style.opacity;
+    ctx.fill(buildFilledPathPath(rings), 'evenodd');
+  });
+}
+
 // A translucent "heat zone" disc showing exactly what the eraser's radius will
 // reach, plus a thin crosshair pinpointing the exact center — the disc scales
 // with the eraser size, so it's obvious at a glance whether it'll reach a stroke.
@@ -227,6 +250,7 @@ export function renderObject(ctx: CanvasRenderingContext2D, obj: YObject): void 
   const data = vectorObjectToData(obj);
   if (data.kind === 'rectangle') paintRect(ctx, data.points, data.style, data.transform);
   else if (data.kind === 'ellipse') paintEllipse(ctx, data.points, data.style, data.transform);
+  else if (data.kind === 'filledPath') paintFilledPath(ctx, data.rings ?? [], data.style, data.transform);
   else paintStroke(ctx, data.points, data.style, data.transform);
 }
 

@@ -84,6 +84,7 @@ export function createVectorObject(data: Omit<VectorObjectData, 'id'> & { id?: s
   obj.set('id', data.id ?? generateId());
   obj.set('kind', data.kind);
   obj.set('points', data.points);
+  if (data.rings) obj.set('rings', data.rings);
   obj.set('style', data.style);
   obj.set('transform', data.transform);
   obj.set('createdBy', data.createdBy);
@@ -211,6 +212,7 @@ export function vectorObjectToData(obj: YObject): VectorObjectData {
     id: obj.get('id') as string,
     kind: obj.get('kind') as VectorObjectData['kind'],
     points: obj.get('points') as VectorObjectData['points'],
+    rings: obj.get('rings') as VectorObjectData['rings'],
     style: obj.get('style') as Style,
     transform: (obj.get('transform') as VectorObjectData['transform']) ?? { ...DEFAULT_TRANSFORM },
     createdBy: obj.get('createdBy') as string,

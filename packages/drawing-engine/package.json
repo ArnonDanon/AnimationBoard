@@ -18,6 +18,7 @@
     "vitest": "^4.1.9"
   },
   "dependencies": {
+    "polygon-clipping": "^0.15.7",
     "yjs": "^13.6.31"
   }
 }

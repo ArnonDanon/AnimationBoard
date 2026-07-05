@@ -1,20 +1,29 @@
 import { getLayersArray, getObjectsArray, vectorObjectToData } from './document';
 import type { YFrame, YObject } from './document';
-import { buildEllipsePath, buildRectPath, buildStrokePath, withObjectTransform } from './render';
+import { buildEllipsePath, buildFilledPathPath, buildRectPath, buildStrokePath, withObjectTransform } from './render';
+import type { Point, VectorObjectData } from './types';
 
 const MIN_HIT_WIDTH = 8;
+
+/** Flattened point set covering an object's own geometry, regardless of kind — used where
+ *  callers (selection outline, eraser bbox pre-filter) need bounds generically across kinds. */
+export function getObjectBoundsPoints(data: VectorObjectData): Point[] {
+  return data.kind === 'filledPath' ? (data.rings ?? []).flat() : data.points;
+}
 
 export function hitTestObject(ctx: CanvasRenderingContext2D, obj: YObject, x: number, y: number): boolean {
   const data = vectorObjectToData(obj);
   let hit = false;
   withObjectTransform(ctx, data.transform, () => {
-    // Rectangle/ellipse are filled shapes — a click anywhere in their interior should
-    // hit, so this tests fill (isPointInPath), not outline distance (isPointInStroke,
+    // Rectangle/ellipse/filledPath are filled shapes — a click anywhere in their interior
+    // should hit, so this tests fill (isPointInPath), not outline distance (isPointInStroke,
     // which is what strokes need since they have no fill at all).
     if (data.kind === 'rectangle') {
       hit = ctx.isPointInPath(buildRectPath(data.points), x, y);
     } else if (data.kind === 'ellipse') {
       hit = ctx.isPointInPath(buildEllipsePath(data.points), x, y);
+    } else if (data.kind === 'filledPath') {
+      hit = ctx.isPointInPath(buildFilledPathPath(data.rings ?? []), x, y, 'evenodd');
     } else {
       ctx.lineWidth = Math.max(data.style.width, MIN_HIT_WIDTH);
       hit = ctx.isPointInStroke(buildStrokePath(data.points), x, y);

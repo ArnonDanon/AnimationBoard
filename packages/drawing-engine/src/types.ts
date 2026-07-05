@@ -37,9 +37,12 @@ export interface Transform {
 
 export interface VectorObjectData {
   id: string;
-  /** 'rectangle'/'ellipse' store exactly 2 points — opposite corners of the bounding box. */
-  kind: 'stroke' | 'rectangle' | 'ellipse';
+  /** 'rectangle'/'ellipse' store exactly 2 points — opposite corners of the bounding box.
+   *  'filledPath' stores its geometry in `rings` instead — `points` is unused ([]). */
+  kind: 'stroke' | 'rectangle' | 'ellipse' | 'filledPath';
   points: Point[];
+  /** Only populated for 'filledPath': one or more closed polygons, each as [outer, ...holes]. */
+  rings?: Point[][];
   style: Style;
   transform: Transform;
   createdBy: string;
