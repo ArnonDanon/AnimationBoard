@@ -6,4 +6,5 @@ export { createRealtimeProvider, RealtimeProvider } from './realtime';
 export type { RealtimeProviderOptions } from './realtime';
 export { BUILT_IN_BRUSHES, DEFAULT_BRUSH } from './brush';
 export { BUILT_IN_PALETTE } from './palette';
+export { hexToRgb, hsbToRgb, rgbToHex, rgbToHsb } from './color';
 export type { Point, Style, Transform, VectorObjectData, LayerData, FrameData, Brush, PressureAffects, Tool } from './types';
