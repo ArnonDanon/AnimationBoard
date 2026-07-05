@@ -11,6 +11,16 @@ export interface Style {
   /** Per-point rendered width (same length as the stroke's points), for pressure-sensitive width. */
   widths?: number[];
   opacity: number;
+  /**
+   * Whether this stroke's own first/last point is a true tip (round cap, the normal look) or a
+   * cut edge left behind by a partial erase (flat/butt cap). Undefined means true (round) — the
+   * default for every hand-drawn stroke, so this only ever needs setting on eraser-produced
+   * fragments. Without it, a fragment's cut edge would draw its own round cap disc *in addition to*
+   * the disc the fragment on the other side of that same cut already draws, double-compositing
+   * the overlap under opacity < 1 — see eraser.ts's eraseStroke for the full explanation.
+   */
+  capStart?: boolean;
+  capEnd?: boolean;
 }
 
 export type PressureAffects = 'width' | 'opacity' | 'both';
