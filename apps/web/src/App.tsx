@@ -22,7 +22,9 @@ function App() {
   return (
     <main className="app-shell">
       <header className="app-header">
-        <h1>AnimationBoard</h1>
+        <h1>
+          AnimationBoard <span className="app-version" title="Version">v{__APP_VERSION__}</span>
+        </h1>
         <p>
           Signed in as <strong>{email}</strong>. <button onClick={() => signOut()}>Sign out</button>
         </p>

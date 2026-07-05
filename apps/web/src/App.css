@@ -7,3 +7,10 @@
   margin: 1.5rem auto 0;
   padding: 0 1.5rem;
 }
+
+.app-version {
+  font-size: 0.9rem;
+  font-weight: normal;
+  color: #888;
+  vertical-align: middle;
+}
