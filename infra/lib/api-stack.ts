@@ -17,6 +17,7 @@ export interface ApiStackProps extends cdk.StackProps {
   projectsTable: dynamodb.Table;
   membersTable: dynamodb.Table;
   connectionsTable: dynamodb.Table;
+  palettesTable: dynamodb.Table;
   documentsBucket: s3.Bucket;
 }
 
@@ -33,12 +34,14 @@ export class ApiStack extends cdk.Stack {
         PROJECTS_TABLE: props.projectsTable.tableName,
         MEMBERS_TABLE: props.membersTable.tableName,
         CONNECTIONS_TABLE: props.connectionsTable.tableName,
+        PALETTES_TABLE: props.palettesTable.tableName,
         DOCUMENTS_BUCKET: props.documentsBucket.bucketName,
         USER_POOL_ID: props.userPool.userPoolId,
       },
     });
     props.projectsTable.grantReadWriteData(httpHandler);
     props.membersTable.grantReadWriteData(httpHandler);
+    props.palettesTable.grantReadWriteData(httpHandler);
     props.documentsBucket.grantReadWrite(httpHandler);
     // Needed only to resolve an invite email to a Cognito user id (sub) when sharing
     // a project — no user pool write access, just the one read-only lookup action.

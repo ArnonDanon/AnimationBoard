@@ -44,4 +44,19 @@ describe('DataStack', () => {
       ]),
     });
   });
+
+  test('PalettesTable has the byOwner GSI ("list my palettes")', () => {
+    template.hasResourceProperties('AWS::DynamoDB::Table', {
+      KeySchema: [{ AttributeName: 'paletteId', KeyType: 'HASH' }],
+      GlobalSecondaryIndexes: Match.arrayWith([
+        Match.objectLike({
+          IndexName: 'byOwner',
+          KeySchema: [
+            { AttributeName: 'ownerId', KeyType: 'HASH' },
+            { AttributeName: 'paletteId', KeyType: 'RANGE' },
+          ],
+        }),
+      ]),
+    });
+  });
 });

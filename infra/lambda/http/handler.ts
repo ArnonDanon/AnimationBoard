@@ -16,6 +16,7 @@ const apiGw = new ApiGatewayManagementApiClient({ endpoint: process.env.WEBSOCKE
 const PROJECTS_TABLE = process.env.PROJECTS_TABLE!;
 const MEMBERS_TABLE = process.env.MEMBERS_TABLE!;
 const CONNECTIONS_TABLE = process.env.CONNECTIONS_TABLE!;
+const PALETTES_TABLE = process.env.PALETTES_TABLE!;
 const DOCUMENTS_BUCKET = process.env.DOCUMENTS_BUCKET!;
 const USER_POOL_ID = process.env.USER_POOL_ID!;
 
@@ -45,6 +46,15 @@ interface Project {
   projectId: string;
   name: string;
   ownerId: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+interface Palette {
+  paletteId: string;
+  ownerId: string;
+  name: string;
+  colors: string[];
   createdAt: string;
   updatedAt: string;
 }
@@ -238,6 +248,74 @@ async function revokeMember(projectId: string, targetAnimatorId: string, callerI
   return respond(200, { ok: true });
 }
 
+async function createPalette(event: APIGatewayProxyEventV2WithJWTAuthorizer, callerId: string): Promise<APIGatewayProxyResultV2> {
+  const body = parseBody(event);
+  const name = typeof body.name === 'string' && body.name.trim() ? body.name.trim() : 'Untitled Palette';
+  const colors = Array.isArray(body.colors) ? body.colors.filter((c): c is string => typeof c === 'string') : [];
+  const paletteId = crypto.randomUUID();
+  const now = new Date().toISOString();
+
+  const palette: Palette = { paletteId, ownerId: callerId, name, colors, createdAt: now, updatedAt: now };
+  await ddb.send(new PutCommand({ TableName: PALETTES_TABLE, Item: palette }));
+  return respond(201, palette);
+}
+
+async function listPalettes(callerId: string): Promise<APIGatewayProxyResultV2> {
+  const result = await ddb.send(
+    new QueryCommand({
+      TableName: PALETTES_TABLE,
+      IndexName: 'byOwner',
+      KeyConditionExpression: 'ownerId = :o',
+      ExpressionAttributeValues: { ':o': callerId },
+    }),
+  );
+  return respond(200, { palettes: result.Items ?? [] });
+}
+
+async function getOwnedPalette(paletteId: string, callerId: string): Promise<Palette | undefined> {
+  const result = await ddb.send(new GetCommand({ TableName: PALETTES_TABLE, Key: { paletteId } }));
+  const palette = result.Item as Palette | undefined;
+  return palette && palette.ownerId === callerId ? palette : undefined;
+}
+
+async function updatePalette(event: APIGatewayProxyEventV2WithJWTAuthorizer, paletteId: string, callerId: string): Promise<APIGatewayProxyResultV2> {
+  if (!(await getOwnedPalette(paletteId, callerId))) return respond(403, { error: 'not the owner of this palette' });
+
+  const body = parseBody(event);
+  const updates: string[] = [];
+  const values: Record<string, unknown> = { ':now': new Date().toISOString() };
+  const names: Record<string, string> = {};
+
+  if (typeof body.name === 'string' && body.name.trim()) {
+    updates.push('#name = :name');
+    names['#name'] = 'name';
+    values[':name'] = body.name.trim();
+  }
+  if (Array.isArray(body.colors)) {
+    updates.push('colors = :colors');
+    values[':colors'] = body.colors.filter((c): c is string => typeof c === 'string');
+  }
+  if (updates.length === 0) return respond(400, { error: 'name and/or colors is required' });
+
+  await ddb.send(
+    new UpdateCommand({
+      TableName: PALETTES_TABLE,
+      Key: { paletteId },
+      UpdateExpression: `SET ${updates.join(', ')}, updatedAt = :now`,
+      ExpressionAttributeNames: Object.keys(names).length ? names : undefined,
+      ExpressionAttributeValues: values,
+    }),
+  );
+  return respond(200, { ok: true });
+}
+
+async function deletePalette(paletteId: string, callerId: string): Promise<APIGatewayProxyResultV2> {
+  if (!(await getOwnedPalette(paletteId, callerId))) return respond(403, { error: 'not the owner of this palette' });
+
+  await ddb.send(new DeleteCommand({ TableName: PALETTES_TABLE, Key: { paletteId } }));
+  return respond(200, { ok: true });
+}
+
 async function loadDocument(projectId: string, callerId: string): Promise<APIGatewayProxyResultV2> {
   const membership = await getMembership(projectId, callerId);
   if (!membership) return respond(403, { error: 'not a member of this project' });
@@ -277,6 +355,19 @@ export const handler: APIGatewayProxyHandlerV2WithJWTAuthorizer = async (event) 
   const segments = event.rawPath.split('/').filter(Boolean);
 
   try {
+    if (segments[0] === 'palettes') {
+      if (segments.length === 1) {
+        if (method === 'POST') return await createPalette(event, callerId);
+        if (method === 'GET') return await listPalettes(callerId);
+      }
+      if (segments.length === 2) {
+        const [, paletteId] = segments;
+        if (method === 'PATCH') return await updatePalette(event, paletteId, callerId);
+        if (method === 'DELETE') return await deletePalette(paletteId, callerId);
+      }
+      return respond(404, { error: 'not found' });
+    }
+
     if (segments[0] !== 'projects') return respond(404, { error: 'not found' });
 
     if (segments.length === 1) {

@@ -16,6 +16,7 @@ function synthApiStack() {
     projectsTable: data.projectsTable,
     membersTable: data.membersTable,
     connectionsTable: data.connectionsTable,
+    palettesTable: data.palettesTable,
     documentsBucket: data.documentsBucket,
   });
   return Template.fromStack(api);
@@ -116,5 +117,20 @@ describe('ApiStack', () => {
         }),
       },
     });
+  });
+
+  test('the HTTP handler has a PALETTES_TABLE env var and read/write access to it', () => {
+    template.hasResourceProperties('AWS::Lambda::Function', {
+      Environment: {
+        Variables: Match.objectLike({ PALETTES_TABLE: Match.anyValue() }),
+      },
+    });
+    const policies = template.findResources('AWS::IAM::Policy', {
+      Properties: { Roles: Match.arrayWith([Match.objectLike({ Ref: Match.stringLikeRegexp('^HttpStubHandlerServiceRole') })]) },
+    });
+    const statements = Object.values(policies).flatMap((p) => p.Properties.PolicyDocument.Statement);
+    expect(statements).toEqual(
+      expect.arrayContaining([expect.objectContaining({ Action: expect.arrayContaining(['dynamodb:PutItem']), Effect: 'Allow' })]),
+    );
   });
 });
