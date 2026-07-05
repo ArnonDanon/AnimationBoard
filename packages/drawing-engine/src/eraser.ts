@@ -203,6 +203,15 @@ function eraseStroke(data: VectorObjectData, erasePath: { x: number; y: number }
   }
   if (!nearSeg.some(Boolean)) return null;
 
+  // `data` may itself already be a fragment from a previous (partial) erase pass — e.g. the
+  // eraser is dragged in several small steps, each re-processing whatever the previous step left
+  // behind. So "is this end a true stroke tip" can't be inferred fresh from array indices alone
+  // (index 0 of *this* object might really be a cut edge inherited from an earlier pass) — it has
+  // to come from `data.style.capStart`/`capEnd` (undefined defaults to true, matching every
+  // ordinary hand-drawn stroke), which every fragment below propagates onward in turn.
+  const trueCapStart = data.style.capStart ?? true;
+  const trueCapEnd = data.style.capEnd ?? true;
+
   const nearCapsules: Ring[] = [];
   const farRanges: [number, number][] = [];
   let cursor = 0;
@@ -217,17 +226,34 @@ function eraseStroke(data: VectorObjectData, erasePath: { x: number; y: number }
     if (i > cursor) farRanges.push([cursor, i]);
     for (let s = i; s <= end; s++) {
       const radius = (widths[s] + widths[s + 1]) / 4;
-      nearCapsules.push(capsulePolygon(pointsWorld[s], pointsWorld[s + 1], radius, DEFAULT_CAP_SEGMENTS));
+      // Only round-cap a near capsule's outer edge where it's a *true* stroke tip — the opposite
+      // case means this edge abuts a far-fragment, whose own stroke rendering already supplies
+      // the single cap there (see that fragment's capStart/capEnd below). Internal joints
+      // *within* this near run keep both caps (harmless — they get unioned away).
+      const roundCapA = s === i ? i === 0 && trueCapStart : true;
+      const roundCapB = s === end ? end + 1 === pointsWorld.length - 1 && trueCapEnd : true;
+      nearCapsules.push(capsulePolygon(pointsWorld[s], pointsWorld[s + 1], radius, DEFAULT_CAP_SEGMENTS, roundCapA, roundCapB));
     }
     cursor = end + 1;
     i = end + 1;
   }
   if (cursor < pointsWorld.length - 1) farRanges.push([cursor, pointsWorld.length - 1]);
 
-  const subjectPC = ringsAsMultiPolygon(nearCapsules);
-  const unionedPC = polygonClipping.union(subjectPC);
+  // Individual per-segment capsules overlap each other wherever the stroke has consecutive
+  // near segments (by construction — each capsule caps both its own endpoints). Subtracting the
+  // eraser sweep from these *un-unioned* would let polygon-clipping's difference() return the
+  // leftover overlap as multiple separate (but still overlapping) result polygons — each of
+  // which becomes its own filledPath object, independently alpha-composited, stacking up right
+  // at the erase site. Unioning first collapses that overlap into one clean shape before the
+  // subtraction, so the result never has any redundant coverage to begin with.
+  // Subtract from the *unioned* capsules, not the raw per-segment set — defensive
+  // correctness (the actual reported darkening bug turned out to be the cap-flag
+  // propagation below, not this), but a properly merged shape going into difference()
+  // is the sounder contract regardless: nothing downstream has to reason about whether
+  // polygon-clipping's output could still carry leftover redundant coverage.
+  const unionedPC = polygonClipping.union(ringsAsMultiPolygon(nearCapsules));
   const originalArea = multiPolygonArea(fromPCMultiPolygon(unionedPC));
-  const result = subtractSweep(subjectPC, originalArea, erasePath, eraseRadius);
+  const result = subtractSweep(unionedPC, originalArea, erasePath, eraseRadius);
   if (result.kind === 'unchanged') return null;
 
   const farFragments: Omit<VectorObjectData, 'id'>[] = farRanges
@@ -235,7 +261,17 @@ function eraseStroke(data: VectorObjectData, erasePath: { x: number; y: number }
     .map(([s, e]) => ({
       kind: 'stroke' as const,
       points: pointsWorld.slice(s, e + 1),
-      style: { color: data.style.color, width: data.style.width, widths: widths.slice(s, e + 1), opacity: data.style.opacity },
+      style: {
+        color: data.style.color,
+        width: data.style.width,
+        widths: widths.slice(s, e + 1),
+        opacity: data.style.opacity,
+        // Only the end(s) that are still the *original* stroke's own true tips stay round —
+        // any edge freshly cut by this split goes flat, since the neighboring near-fragment's
+        // (unioned) capsule geometry is what supplies the single cap at that shared boundary.
+        capStart: s === 0 ? trueCapStart : false,
+        capEnd: e === pointsWorld.length - 1 ? trueCapEnd : false,
+      },
       transform: { ...DEFAULT_TRANSFORM },
       createdBy: data.createdBy,
     }));

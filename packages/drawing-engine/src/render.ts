@@ -91,27 +91,58 @@ function paintDot(ctx: CanvasRenderingContext2D, point: Point, radius: number, s
 // far cheaper than segment-by-segment stroking for anything beyond a handful of points.
 function paintUniformStroke(ctx: CanvasRenderingContext2D, points: Point[], width: number, style: Style, transform: Transform): void {
   const path = buildStrokePath(points);
+  const capStart = style.capStart ?? true;
+  const capEnd = style.capEnd ?? true;
   withObjectTransform(ctx, transform, getTransformPivot(points), () => {
     ctx.strokeStyle = style.color;
     ctx.lineWidth = width;
     ctx.globalAlpha = style.opacity;
-    ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
+    // Canvas can't give a path's two ends different lineCaps in one stroke() call — draw flat
+    // (butt) and, if exactly one end is a true tip (see eraser.ts's eraseStroke), manually add
+    // that one end's round-cap disc after, in the same paint pass (same alpha, one composite).
+    ctx.lineCap = capStart && capEnd ? 'round' : 'butt';
     ctx.stroke(path);
+    if (capStart !== capEnd) {
+      const tip = capStart ? points[0] : points[points.length - 1];
+      ctx.fillStyle = style.color;
+      ctx.beginPath();
+      ctx.arc(tip.x, tip.y, width / 2, 0, Math.PI * 2);
+      ctx.fill();
+    }
   });
 }
 
 function paintVariableWidthSegments(ctx: CanvasRenderingContext2D, points: Point[], widths: number[], style: Style, transform: Transform): void {
+  const capStart = style.capStart ?? true;
+  const capEnd = style.capEnd ?? true;
+  // Only a single-segment (2-point) stroke has no neighboring segment to independently supply
+  // a shared joint's round cap — every other stroke can safely flatten just the *true* outer
+  // tip on its own segment and rely on the neighboring segment's own unconditional round cap to
+  // still cover that shared internal joint (exactly as before this existed — flattening one
+  // side of a joint that's still independently covered from the other side changes nothing
+  // visible there).
+  const singleSegment = points.length === 2;
   withObjectTransform(ctx, transform, getTransformPivot(points), () => {
     ctx.strokeStyle = style.color;
-    ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
     for (let i = 1; i < points.length; i++) {
+      const segCapStart = i === 1 ? capStart : true;
+      const segCapEnd = i === points.length - 1 ? capEnd : true;
       ctx.lineWidth = (widths[i - 1] + widths[i]) / 2;
+      ctx.lineCap = segCapStart && segCapEnd ? 'round' : 'butt';
       ctx.beginPath();
       ctx.moveTo(points[i - 1].x, points[i - 1].y);
       ctx.lineTo(points[i].x, points[i].y);
       ctx.stroke();
+      if (singleSegment && segCapStart !== segCapEnd) {
+        const tip = segCapStart ? points[i - 1] : points[i];
+        const tipWidth = segCapStart ? widths[i - 1] : widths[i];
+        ctx.fillStyle = style.color;
+        ctx.beginPath();
+        ctx.arc(tip.x, tip.y, tipWidth / 2, 0, Math.PI * 2);
+        ctx.fill();
+      }
     }
   });
 }

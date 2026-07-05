@@ -25,11 +25,27 @@ export function circlePolygon(cx: number, cy: number, r: number, segments: numbe
 }
 
 /**
- * A straight segment with round caps on both ends — the same shape Canvas2D already renders for
- * `lineCap: 'round'` / `lineJoin: 'round'` strokes (see render.ts's paintUniformStroke), so fill
- * geometry matches rendered pixels exactly. `capSegments` is the arc resolution per semicircle cap.
+ * A straight segment with round caps on both ends (by default) — the same shape Canvas2D already
+ * renders for `lineCap: 'round'` / `lineJoin: 'round'` strokes (see render.ts's paintUniformStroke),
+ * so fill geometry matches rendered pixels exactly. `capSegments` is the arc resolution per
+ * semicircle cap.
+ *
+ * `roundCapA`/`roundCapB` (default true) let a caller flatten either end to a plain perpendicular
+ * cut instead — needed by the eraser (see eraser.ts's eraseStroke): a near-fragment's end that
+ * abuts a *synthetic* cut boundary (not the original stroke's true tip) would otherwise draw a full
+ * round cap disc there, doubling up with the *other* fragment on that boundary's own round cap and
+ * double-compositing the overlap under opacity < 1 — visibly darkening exactly where a stroke was
+ * partially erased. Flattening one side removes the redundant disc while leaving the other
+ * fragment's single cap as the only one drawn.
  */
-export function capsulePolygon(a: { x: number; y: number }, b: { x: number; y: number }, radius: number, capSegments: number): Ring {
+export function capsulePolygon(
+  a: { x: number; y: number },
+  b: { x: number; y: number },
+  radius: number,
+  capSegments: number,
+  roundCapA: boolean = true,
+  roundCapB: boolean = true,
+): Ring {
   const dx = b.x - a.x;
   const dy = b.y - a.y;
   const length = Math.hypot(dx, dy);
@@ -46,16 +62,21 @@ export function capsulePolygon(a: { x: number; y: number }, b: { x: number; y: n
   const rightA = { x: a.x - nx, y: a.y - ny, pressure: 0 };
 
   const ring: Ring = [leftA, leftB];
-  // Leading cap at b: sweeps from leftB, through the forward direction, to rightB.
-  for (let i = 1; i < capSegments; i++) {
-    const angle = dirAngle + Math.PI / 2 - Math.PI * (i / capSegments);
-    ring.push({ x: b.x + r * Math.cos(angle), y: b.y + r * Math.sin(angle), pressure: 0 });
+  // Leading cap at b: sweeps from leftB, through the forward direction, to rightB. When flattened,
+  // leftB/rightB alone already give a straight perpendicular edge at b — no arc points needed.
+  if (roundCapB) {
+    for (let i = 1; i < capSegments; i++) {
+      const angle = dirAngle + Math.PI / 2 - Math.PI * (i / capSegments);
+      ring.push({ x: b.x + r * Math.cos(angle), y: b.y + r * Math.sin(angle), pressure: 0 });
+    }
   }
   ring.push(rightB, rightA);
   // Trailing cap at a: sweeps from rightA, through the backward direction, to leftA.
-  for (let i = 1; i < capSegments; i++) {
-    const angle = dirAngle - Math.PI / 2 - Math.PI * (i / capSegments);
-    ring.push({ x: a.x + r * Math.cos(angle), y: a.y + r * Math.sin(angle), pressure: 0 });
+  if (roundCapA) {
+    for (let i = 1; i < capSegments; i++) {
+      const angle = dirAngle - Math.PI / 2 - Math.PI * (i / capSegments);
+      ring.push({ x: a.x + r * Math.cos(angle), y: a.y + r * Math.sin(angle), pressure: 0 });
+    }
   }
   return ring;
 }

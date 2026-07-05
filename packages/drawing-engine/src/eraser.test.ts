@@ -177,6 +177,46 @@ describe('eraseFromObjectData — stroke', () => {
     expect(isCovered(hit!, 100, 50)).toBe(false);
   });
 
+  it('flattens a far-fragment\'s cut edge but keeps its true stroke-tip cap round (regression: a low-opacity stroke visibly darkened right at the erase boundary, from two independently-rendered round caps covering the same disc — see render.ts\'s paintUniformStroke/paintVariableWidthSegments)', () => {
+    const stroke = makeStroke([{ x: 0, y: 0 }, { x: 50, y: 0 }, { x: 100, y: 0 }, { x: 150, y: 0 }, { x: 200, y: 0 }], 4);
+    const result = eraseFromObjectData(stroke, [{ x: 100, y: 0 }], 10);
+    expect(result).not.toBeNull();
+
+    const farLeft = result!.find((f) => f.kind === 'stroke' && f.points[0].x === 0)!;
+    const farRight = result!.find((f) => f.kind === 'stroke' && f.points[f.points.length - 1].x === 200)!;
+    expect(farLeft).toBeDefined();
+    expect(farRight).toBeDefined();
+
+    // The true stroke start/end (x=0 and x=200) stay round — untouched, normal look.
+    expect(farLeft.style.capStart).toBe(true);
+    expect(farRight.style.capEnd).toBe(true);
+    // The edges freshly cut by *this* erase go flat — the near-fragment's own (unioned)
+    // capsule geometry is what supplies the single round-looking cap at that shared
+    // boundary; if this fragment's own rendering also drew a round cap there, that disc
+    // would be painted twice, double-compositing under opacity < 1.
+    expect(farLeft.style.capEnd).toBe(false);
+    expect(farRight.style.capStart).toBe(false);
+  });
+
+  it('keeps propagating capStart/capEnd correctly across a second erase pass into an already-cut fragment (cascading drag ticks)', () => {
+    const stroke = makeStroke([{ x: 0, y: 0 }, { x: 50, y: 0 }, { x: 100, y: 0 }, { x: 150, y: 0 }, { x: 200, y: 0 }], 4);
+    const firstPass = eraseFromObjectData(stroke, [{ x: 100, y: 0 }], 10)!;
+    const farRight = firstPass.find((f) => f.kind === 'stroke' && f.points[f.points.length - 1].x === 200)!;
+    expect(farRight.style.capStart).toBe(false); // already a cut edge from pass 1
+
+    // Re-process farRight as its own object (as eraseFromLayer would on the next drag
+    // tick), cutting again right at its own start -- a naive index-based "am I at local
+    // index 0" check would wrongly treat this as a true tip and reintroduce a round cap
+    // exactly where farRight's neighbor (from pass 1) already supplies one.
+    const farRightData: VectorObjectData = { ...farRight, id: 'far-right-1' };
+    const secondPass = eraseFromObjectData(farRightData, [{ x: farRight.points[0].x + 5, y: 0 }], 10)!;
+    for (const fragment of secondPass) {
+      if (fragment.kind === 'stroke' && fragment.points[0].x === farRight.points[0].x) {
+        expect(fragment.style.capStart).toBe(false); // must still be false, not reset to true
+      }
+    }
+  });
+
   it('carries per-point widths into untouched far-run stroke fragments with matching lengths', () => {
     const stroke = makeStroke([{ x: 0, y: 0 }, { x: 50, y: 0 }, { x: 100, y: 0 }, { x: 150, y: 0 }, { x: 200, y: 0 }]);
     stroke.style.widths = [2, 4, 6, 8, 10];
