@@ -61,6 +61,14 @@
   background: #e6ecff;
 }
 
+.frame-thumbnail {
+  display: block;
+  width: 100%;
+  border: 1px solid #ccc;
+  background: #fff;
+  margin-bottom: 0.3rem;
+}
+
 .frame-name {
   display: block;
   overflow: hidden;

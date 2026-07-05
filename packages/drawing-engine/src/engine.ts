@@ -28,7 +28,7 @@ import type { YFrame, YObject } from './document';
 import { attachPointerCapture } from './input';
 import type { PointerModifiers } from './input';
 import { getObjectBoundsPoints, hitTestFrame } from './geometry';
-import { paintEraserCursor, paintEllipse, paintFrameLayers, paintRect, paintSelectionOutline, paintStroke, renderOnionSkin } from './render';
+import { paintEraserCursor, paintEllipse, paintFrameLayers, paintLayerObjects, paintRect, paintSelectionOutline, paintStroke, renderOnionSkin } from './render';
 import { createUndoManager } from './history';
 import { exportSnapshot as encodeSnapshot } from './serialize';
 import { rotateObject, scaleObject, translateObject } from './transform';
@@ -459,6 +459,18 @@ export class DrawingEngine {
     return result;
   }
 
+  // The full composited frame (all visible layers) scaled down — see
+  // renderLayerThumbnail's comment for the ctx/debounce contract, same here.
+  renderFrameThumbnail(index: number, ctx: CanvasRenderingContext2D, width: number, height: number): void {
+    ctx.clearRect(0, 0, width, height);
+    const frames = getFramesArray(this.doc);
+    const frame = frames.get(Math.min(index, frames.length - 1));
+    ctx.save();
+    ctx.scale(width / this.canvas.width, height / this.canvas.height);
+    paintFrameLayers(ctx, frame);
+    ctx.restore();
+  }
+
   getFps(): number {
     return getFpsFromDoc(this.doc);
   }
@@ -553,6 +565,22 @@ export class DrawingEngine {
 
   getActiveLayerIndex(): number {
     return Math.min(this.activeLayerIndex, getLayersArray(this.activeFrame).length - 1);
+  }
+
+  // Just this one layer's own content, isolated (not composited with other layers) —
+  // the conventional meaning of a "layer thumbnail" vs. a frame thumbnail's full
+  // composite. `ctx` belongs to the caller's own small thumbnail canvas, scaled down
+  // from the real canvas's dimensions; callers are expected to debounce how often
+  // they call this (e.g. on every doc mutation while a stroke is being drawn would be
+  // wasteful), not call it on every render.
+  renderLayerThumbnail(index: number, ctx: CanvasRenderingContext2D, width: number, height: number): void {
+    ctx.clearRect(0, 0, width, height);
+    const layers = getLayersArray(this.activeFrame);
+    const layer = layers.get(Math.min(index, layers.length - 1));
+    ctx.save();
+    ctx.scale(width / this.canvas.width, height / this.canvas.height);
+    paintLayerObjects(ctx, layer);
+    ctx.restore();
   }
 
   setActiveLayerIndex(index: number): void {

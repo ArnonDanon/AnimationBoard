@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { addLayer, createDocument, createVectorObject, getFramesArray, getLayersArray, getObjectsArray } from './document';
-import { getTransformPivot, paintFrameLayers } from './render';
+import { getTransformPivot, paintFrameLayers, paintLayerObjects } from './render';
 import { DEFAULT_TRANSFORM } from './types';
 import type { Point } from './types';
 
@@ -140,5 +140,24 @@ describe('paintFrameLayers live-extra z-order (regression for live stroke always
     paintFrameLayers(makeRecordingCtx(order), frame, 1, () => order.push('LIVE'));
 
     expect(order).toEqual(['stroke:#111111', 'stroke:#222222', 'LIVE']);
+  });
+});
+
+describe('paintLayerObjects (layer-thumbnail isolation)', () => {
+  it('paints only the given layer\'s own objects, not other layers in the same frame', () => {
+    const doc = createDocument();
+    const frame = getFramesArray(doc).get(0);
+    const layer0 = getLayersArray(frame).get(0);
+    const layer1 = addLayer(frame, 'Layer 2');
+    pushStroke(getObjectsArray(layer0), '#111111');
+    pushStroke(getObjectsArray(layer1), '#222222');
+
+    const order: string[] = [];
+    paintLayerObjects(makeRecordingCtx(order), layer0);
+    expect(order).toEqual(['stroke:#111111']);
+
+    const order2: string[] = [];
+    paintLayerObjects(makeRecordingCtx(order2), layer1);
+    expect(order2).toEqual(['stroke:#222222']);
   });
 });
