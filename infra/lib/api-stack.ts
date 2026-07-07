@@ -28,7 +28,7 @@ export class ApiStack extends cdk.Stack {
     const httpHandler = new lambdaNode.NodejsFunction(this, 'HttpStubHandler', {
       entry: path.join(__dirname, '../lambda/http/handler.ts'),
       handler: 'handler',
-      runtime: lambda.Runtime.NODEJS_20_X,
+      runtime: lambda.Runtime.NODEJS_24_X,
       timeout: cdk.Duration.seconds(10),
       environment: {
         PROJECTS_TABLE: props.projectsTable.tableName,
@@ -81,7 +81,7 @@ export class ApiStack extends cdk.Stack {
     const wsAuthorizerHandler = new lambdaNode.NodejsFunction(this, 'WsAuthorizerHandler', {
       entry: path.join(__dirname, '../lambda/ws/authorizer.ts'),
       handler: 'handler',
-      runtime: lambda.Runtime.NODEJS_20_X,
+      runtime: lambda.Runtime.NODEJS_24_X,
       timeout: cdk.Duration.seconds(10),
       environment: {
         MEMBERS_TABLE: props.membersTable.tableName,
@@ -94,16 +94,19 @@ export class ApiStack extends cdk.Stack {
     const wsConnectHandler = new lambdaNode.NodejsFunction(this, 'WsConnectHandler', {
       entry: path.join(__dirname, '../lambda/ws/connect.ts'),
       handler: 'handler',
+      runtime: lambda.Runtime.NODEJS_24_X,
       environment: { CONNECTIONS_TABLE: props.connectionsTable.tableName },
     });
     const wsDisconnectHandler = new lambdaNode.NodejsFunction(this, 'WsDisconnectHandler', {
       entry: path.join(__dirname, '../lambda/ws/disconnect.ts'),
       handler: 'handler',
+      runtime: lambda.Runtime.NODEJS_24_X,
       environment: { CONNECTIONS_TABLE: props.connectionsTable.tableName },
     });
     const wsDefaultHandler = new lambdaNode.NodejsFunction(this, 'WsDefaultHandler', {
       entry: path.join(__dirname, '../lambda/ws/default.ts'),
       handler: 'handler',
+      runtime: lambda.Runtime.NODEJS_24_X,
       environment: { CONNECTIONS_TABLE: props.connectionsTable.tableName },
     });
     for (const fn of [wsConnectHandler, wsDisconnectHandler, wsDefaultHandler]) {
